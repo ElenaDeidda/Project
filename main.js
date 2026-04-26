@@ -6,8 +6,11 @@ import 'dotenv/config';
 
 const TOKEN = process.env.TOKEN;
 if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
-const HOST  = "https://deliveroojs.bears.disi.unitn.it/";
+//const HOST  = "https://deliveroojs.bears.disi.unitn.it/";
+const HOST = process.env.HOST;
 const socket = DjsConnect(HOST, TOKEN);
+//const socket = DjsConnect('localhost:8080', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjM0MjlmZCIsIm5hbWUiOiJwaXBwbyIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzc3MjE5NzUyfQ.fUrhuwb-EV26SfO-jxR8sBB2o-qVC0FdNlu8te_9beA');
+
 const agent  = new IntentionRevision(socket);
 
 // --- Listener SDK ---
