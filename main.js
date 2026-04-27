@@ -15,8 +15,46 @@ const agent  = new IntentionRevision(socket);
 
 // --- Listener SDK ---
 socket.onConfig( (config) => updateConfig(config) );
+/*molto importante: aggiorna la config prima di qualsiasi altro evento, così beliefs è sempre consistente con la config (es. observation_distance)*/
+/*Il sotto-oggetto config.GAME è il più utile
+
+config.GAME.player.movement_duration    // ms per muoversi di un tile
+config.GAME.player.observation_distance // quanti tile riesci a "vedere"
+config.GAME.player.capacity             // quanti pacchi puoi portare
+
+config.GAME.parcels.generation_event    // frequenza spawning pacchi
+config.GAME.parcels.decaying_event      // frequenza decay reward
+config.GAME.parcels.max                 // max pacchi sulla mappa
+config.GAME.parcels.reward_avg          // reward medio
+config.GAME.parcels.reward_variance
+
+config.GAME.npcs[i].moving_event        // frequenza movimento NPC
+config.GAME.npcs[i].type               // 'random' | 'intelligent'
+config.GAME.npcs[i].count
+ */
 
 socket.onMap( (width, height, tiles) => updateMap(width, height, tiles) );
+/*Il server manda l'evento una volta sola all'avvio, con:
+
+Parametro	Tipo	Contenuto
+width	number	larghezza mappa in tile
+height	number	altezza mappa in tile
+tiles	IOTile[]	array di tile con x, y, type
+I valori di type che contano sono:
+
+1 → tile normale (percorribile)
+2 / 'delivery' → punto di consegna 
+updateMap costruisce due strutture:
+
+// 1. mappa navigabile: chiave "x_y" → {x, y, type}
+beliefs.mapTiles.set(`${tile.x}_${tile.y}`, { x, y, type });
+
+// 2. lista delivery points, usata per scegliere dove consegnare
+if (tile.type === 2 || tile.type === 'delivery')
+    beliefs.deliveryPoints.push({ x, y });
+beliefs.mapTiles viene poi usata in navigateTo (in moves.js) per sapere quali celle sono percorribili durante il pathfinding.
+beliefs.deliveryPoints viene usata da options.js per scegliere il delivery point più vicino.
+*/
 
 socket.onYou( ({id, name, x, y, score}) => {
     beliefs.me.id = id; beliefs.me.name = name;
@@ -26,6 +64,7 @@ socket.onYou( ({id, name, x, y, score}) => {
 // Ad ogni sensing: aggiorna i beliefs e delibera subito
 socket.onSensing( (s) => {
     updateSensing(s);
+    // Delibera: genera opzioni e scegli intenzione migliore
     agent.push( deliberate( generateOptions() ) );
 });
 
