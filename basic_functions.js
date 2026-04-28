@@ -106,17 +106,18 @@ export function bfsPath(start, goal, walkableTiles) {
     const startKey = key(start.x, start.y);
     const goalKey  = key(goal.x,  goal.y);
 
-    if (startKey === goalKey) return []; // già a destinazione
+    if (startKey === goalKey) return [];
 
-    // Coda BFS: ogni elemento è il percorso fino al nodo corrente
-    const queue   = [[{ x: Math.round(start.x), y: Math.round(start.y) }]];
-    const visited = new Set([startKey]);
+    // parent mappa: nKey → {nodo, parentKey}
+    // La coda contiene solo il nodo corrente, non l'intero percorso
+    const parent = new Map();
+    const queue  = [{ x: Math.round(start.x), y: Math.round(start.y) }];
+    parent.set(startKey, null);
 
     while (queue.length > 0) {
-        const path    = queue.shift();
-        const current = path[path.length - 1];
+        const current = queue.shift();
+        const curKey  = key(current.x, current.y);
 
-        // I 4 vicini (su, giù, destra, sinistra)
         const neighbors = [
             { x: current.x + 1, y: current.y },
             { x: current.x - 1, y: current.y },
@@ -126,22 +127,30 @@ export function bfsPath(start, goal, walkableTiles) {
 
         for (const nb of neighbors) {
             const nKey = key(nb.x, nb.y);
-            if (visited.has(nKey)) continue;
+            if (parent.has(nKey)) continue;
 
-            // Verifica che la tile esista e sia camminabile
             const tile = walkableTiles.get(nKey);
-            if (!tile) continue; // tile mai vista = ostacolo implicito
-            if (tile.type === 0 || tile.type === 'none') continue; // non camminabile
+            if (!tile) continue;
+            if (tile.type === '0') continue;
 
-            visited.add(nKey);
-            const newPath = [...path, nb];
+            parent.set(nKey, { node: current, key: curKey });
 
-            if (nKey === goalKey) return newPath.slice(1); // restituisce percorso senza start
-            queue.push(newPath);
+            if (nKey === goalKey) {
+                // Ricostruisce il percorso a ritroso: goal → start, poi inverte
+                const path = [nb];
+                let cur = parent.get(nKey);
+                while (cur && cur.key !== startKey) {
+                    path.push(cur.node);
+                    cur = parent.get(cur.key);
+                }
+                return path.reverse();
+            }
+
+            queue.push(nb);
         }
     }
 
-    return null; // nessun percorso trovato nella mappa conosciuta
+    return null;
 }
 
 /**

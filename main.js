@@ -11,7 +11,7 @@ const HOST = process.env.HOST;
 const socket = DjsConnect(HOST, TOKEN);
 //const socket = DjsConnect('localhost:8080', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjM0MjlmZCIsIm5hbWUiOiJwaXBwbyIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzc3MjE5NzUyfQ.fUrhuwb-EV26SfO-jxR8sBB2o-qVC0FdNlu8te_9beA');
 
-const agent  = new IntentionRevision(socket);
+const agent = new IntentionRevision(socket);
 
 // --- Listener SDK ---
 socket.onConfig( (config) => updateConfig(config) );
@@ -63,10 +63,46 @@ socket.onYou( ({id, name, x, y, score}) => {
 
 // Ad ogni sensing: aggiorna i beliefs e delibera subito
 socket.onSensing( (s) => {
+    // s contiene la posizione aggiornata di me e degli altri agenti, più i pacchi visibili
     updateSensing(s);
     // Delibera: genera opzioni e scegli intenzione migliore
     agent.push( deliberate( generateOptions() ) );
 });
+/*sensing = {
+    positions: [{x, y}, ...]       // tile percorribili visibili (non usato da noi)
+    agents:    [IOAgent, ...]       // agenti nel raggio di osservazione
+    parcels:   [IOParcel, ...]      // pacchi nel raggio di osservazione
+    crates:    [IOCrate, ...]       // casse (non rilevanti per Deliveroo base)
+}
+ sensing.agents — gli altri agenti visibili
+
+{
+    id:       string    // identificatore univoco
+    name:     string
+    teamId:   string
+    teamName: string
+    x?:       number    // undefined se in movimento tra due tile
+    y?:       number    // undefined se in movimento tra due tile
+    score:    number
+    penalty:  number
+}
+    
+sensing.parcels — i pacchi visibili
+
+{
+    id:         string
+    x:          number
+    y:          number
+    reward:     number    // decade nel tempo
+    carriedBy?: string    // undefined se a terra, id agente se portato
+}
+
+sensing
+  ├── .parcels  → updateSensing → beliefs.parcels / carrying / carriedParcels
+  ├── .agents   → _updateAgentHistory → beliefs.agentHistory
+  └── .positions, .crates  → ignorati
+
+*/
 
 // --- Inizializzazione ---
 // socket.me e socket.map sono undefined (enhance() non copia i class fields)
