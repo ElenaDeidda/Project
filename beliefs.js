@@ -28,7 +28,6 @@ export function updateMap(width, height, tiles) {
     }
 }
 
-/** @param {import('@unitn-asa/deliveroo-js-sdk/src/types/IOSensing.js').IOSensing} sensing */
 export function updateSensing(sensing) {
     beliefs.parcels.clear();
     for (const p of sensing.parcels) {
@@ -55,23 +54,30 @@ function _updateAgentHistory(agents) {
     const seenIds = new Set(agents.map(a => a.id));
 
     for (const a of agents) {
-        if (!a.x || !a.y || isMoving(a)) continue;
-
+        //continue salta alla prossima iterazione del ciclo, mentre break esce completamente dal ciclo. 
+        // Qui usiamo continue perché vogliamo semplicemente ignorare gli agenti in movimento e non aggiungerli alla storia,
+        //  ma continuare a processare gli altri agenti visibili. 
+        if (isMoving(a)) continue;
+        //Caso A - Nuovo agente visto per la prima volta: lo aggiungo alla storia
         if (!beliefs.agentHistory.has(a.id)) {
             beliefs.agentHistory.set(a.id, [{ name: a.name, x: a.x, y: a.y, timestamp: now, direction: 'none' }]);
             console.log(`[agentHistory] NUOVO agente "${a.name}" (${a.id}) @ (${a.x},${a.y})`);
+            // Se l'agente è molto vicino ma non è stato visto prima, potrebbe essere un agente già noto che è entrato nel raggio di osservazione dopo essere stato lost. In questo caso, lo tracciamo comunque, ma con una nota speciale.
         } else {
             const history = beliefs.agentHistory.get(a.id);
             const last    = history[history.length - 1];
             const prev    = typeof last === 'object' ? last : _findLastKnownPos(history);
             let dir = 'none';
+            // Caso B - Agente già visto: se si è mosso, aggiorno la storia con la nuova posizione e direzione
             if (prev) {
                 if (prev.x < a.x) dir = 'right';
                 else if (prev.x > a.x) dir = 'left';
                 else if (prev.y < a.y) dir = 'up';
                 else if (prev.y > a.y) dir = 'down';
             }
+            // Se la posizione è cambiata, aggiungo un nuovo record; altrimenti, aggiorno il timestamp dell'ultimo record
             if (typeof last === 'object') {
+                // Se l'agente era fermo e ora è in movimento, o viceversa, o se è cambiata la posizione, aggiungo un nuovo record
                 if (last.x !== a.x || last.y !== a.y) {
                     history.push({ name: a.name, x: a.x, y: a.y, timestamp: now, direction: dir });
                     console.log(`[agentHistory] MOSSO "${a.name}" (${a.id}) → (${a.x},${a.y}) dir:${dir}`);
@@ -87,11 +93,11 @@ function _updateAgentHistory(agents) {
 
     for (const [id, history] of beliefs.agentHistory.entries()) {
         if (seenIds.has(id)) continue;
-        const last      = history[history.length - 1];
+        const last = history[history.length - 1];
         const lastKnown = _findLastKnownPos(history);
         if (typeof last === 'object') {
             history.push('lost');
-            console.log(`[agentHistory] LOST agente (${id}), ultima pos: (${lastKnown?.x},${lastKnown?.y})`);
+            console.log(`[agentHistory] LOST agente (${id}), ultima pos: (${lastKnown?.x},${lastKnown?.y}) — probabilmente in movimento`);
         } else if (lastKnown && smartDist(beliefs.me, lastKnown) < obsDist) {
             beliefs.agentHistory.delete(id);
             console.log(`[agentHistory] RIMOSSO agente (${id}), era lost e dentro obs range`);
