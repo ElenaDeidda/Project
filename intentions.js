@@ -1,6 +1,4 @@
-// intentions.js — IntentionRevision e IntentionDeliberation.
-// Il socket viene passato nel costruttore e inoltrato ai piani.
-
+// intentions.js
 import { planLibrary } from './plans.js';
 
 export class IntentionRevision {
@@ -24,7 +22,11 @@ export class IntentionRevision {
         this.#currentKey = key;
         this.#isRunning  = true;
 
-        console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
+        if (predicate[0] !== 'wait' && predicate[0] !== 'patrol_spawn') {
+            console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
+        } else if (predicate[0] === 'patrol_spawn') {
+            console.log(`[INTENTIONS] → ${predicate[0]}`);
+        }
 
         intention.achieve()
             .catch(err => {
@@ -44,6 +46,7 @@ export class IntentionRevision {
 }
 
 class IntentionDeliberation {
+    // ... RESTA IDENTICO AL CODICE PRECEDENTE ...
     #predicate;
     #socket;
     #currentPlan = null;
@@ -66,7 +69,6 @@ class IntentionDeliberation {
             if (this.#stopped) throw ['stopped'];
             if (!PlanClass.isApplicableTo(...this.#predicate)) continue;
 
-            // Il socket viene passato al costruttore del piano
             this.#currentPlan = new PlanClass(this.#socket);
             try {
                 return await this.#currentPlan.execute(...this.#predicate);
@@ -82,5 +84,7 @@ class IntentionDeliberation {
 function _predicateKey(p) {
     if (p[0] === 'go_pick_up') return `${p[0]}_${p[1]}_${p[2]}_${p[3]}`;
     if (p[0] === 'deliver')    return `${p[0]}_${p[1]}_${p[2]}`;
+    if (p[0] === 'patrol_spawn') return 'patrol_spawn';
+    if (p[0] === 'wait')       return 'wait';
     return p[0];
 }

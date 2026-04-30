@@ -1,52 +1,57 @@
 // beliefs.js — Stato del mondo e funzioni di aggiornamento
-import { smartDist, isMoving } from './basic_functions.js';
+import { smartDist /*, isMoving */ } from './basic_functions.js';
 
 export const beliefs = {
     me:            { id: '', name: '', x: 0, y: 0, score: 0 },
     config:        {},
     mapTiles:      new Map(),
     deliveryPoints:[],
+    spawnPoints:   [], // <-- NUOVO: memorizziamo dove nascono i pacchi
     parcels:       new Map(),
-    agentHistory:  new Map(),
     carrying:      false,
     carriedParcels:[],
+
+    // --- GESTIONE ALTRI AGENTI COMMENTATA ---
+    // agentHistory:  new Map(),
 };
 
-/* @type { Map< string, {id: string, carriedBy?: string, x:number, y:number, reward:number} > }*/
 export function updateConfig(config) {
     beliefs.config = config;
 }
 
 export function updateMap(width, height, tiles) {
+    // Svuotiamo gli array prima di aggiornarli
+    beliefs.deliveryPoints = [];
+    beliefs.spawnPoints = [];
+
     for (const tile of tiles) {
         const key = `${tile.x}_${tile.y}`;
         beliefs.mapTiles.set(key, {type: tile.type });
 
         if (tile.type === '2') {
             beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });
+        } else if (tile.type === '1') {
+            beliefs.spawnPoints.push({ x: tile.x, y: tile.y }); // <-- Salviamo gli spawn point
         }
     }
 }
 
-/** @param {import('@unitn-asa/deliveroo-js-sdk/src/types/IOSensing.js').IOSensing} sensing */
 export function updateSensing(sensing) {
     beliefs.parcels.clear();
     for (const p of sensing.parcels) {
         if (!p.carriedBy || p.carriedBy === beliefs.me.id) {
-            // con l'if evitiamo di inserire nei beliefs i pacchi che stanno portando gli altri agenti, di cui non conosciamo la posizione esatta
             beliefs.parcels.set(p.id, { id: p.id, x: p.x, y: p.y, reward: p.reward, carriedBy: p.carriedBy ?? null });
         }
     }
     console.log(`[updateSensing] parcels visibili:`, beliefs.parcels.size);
-    console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
 
     const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
     beliefs.carrying       = mine.length > 0;
     beliefs.carriedParcels = mine;
     console.log(`[updateSensing] carrying:`, beliefs.carrying);
-    console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
 
-    _updateAgentHistory(sensing.agents);
+    // --- GESTIONE ALTRI AGENTI COMMENTATA ---
+    // _updateAgentHistory(sensing.agents);
 }
 
 function _updateAgentHistory(agents) {
