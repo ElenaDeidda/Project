@@ -1,5 +1,5 @@
 // beliefs.js — Stato del mondo e funzioni di aggiornamento
-import { smartDist, isMoving } from './basic_functions.js';
+import { smartDist } from './basic_functions.js';
 
 export const beliefs = {
     me:            { id: '', name: '', x: 0, y: 0, score: 0 },
@@ -44,11 +44,9 @@ export function updateSensing(sensing) {
     beliefs.carriedParcels = mine;
     console.log(`[updateSensing] carrying:`, beliefs.carrying);
     console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
-
-    _updateAgentHistory(sensing.agents);
 }
 
-function _updateAgentHistory(agents) {
+/*function _updateAgentHistory(agents) {
     const now     = Date.now();
     const obsDist = beliefs.config?.GAME?.player?.observation_distance ?? 5;
     const seenIds = new Set(agents.map(a => a.id));
@@ -112,6 +110,7 @@ function _findLastKnownPos(history) {
         if (typeof history[i] === 'object') return history[i];
     return null;
 }
+*/
 
 export function getKnownAgentPositions() {
     const out = [];

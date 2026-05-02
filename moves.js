@@ -1,181 +1,254 @@
 // =============================================================
 // moves.js
-// Modulo di movimento dell'agente.
+// Modulo di movimento dell'agente — versione A*.
 //
-// Offre DUE modalità di navigazione:
+// La mappa completa è nota fin dall'avvio (evento 'map' di Deliveroo),
+// quindi l'esplorazione cieca non ha più senso: usiamo A* con
+// euristica di Manhattan per trovare il percorso ottimale verso
+// qualsiasi target già dal primo passo.
 //
-//   1. BLIND (senza memoria):
-//      Muove l'agente in modo greedy verso il target,
-//      senza conoscere la mappa. Utile per reazioni immediate
-//      o quando la mappa non è ancora stata esplorata.
-//      Funzioni: blindStep, blindMoveTo
+// DIFFERENZE rispetto alla versione precedente:
+//   - bfsPath → aStarPath (più efficiente su griglie grandi: esplora
+//     meno nodi grazie all'euristica che guida la ricerca verso il goal)
+//   - Rimossi: blindStep, blindMoveTo (mappa sempre nota → mai usati)
+//   - Rimosso: exploreRandomStep (l'agente non ha zone inesplorate)
+//     ⚠️  Il piano Explore in plans.js va rimosso o sostituito con
+//         un piano di "attesa intelligente" (es. muoversi verso la
+//         zona di spawn più vicina in attesa di nuovi pacchi).
 //
-//   2. SMART (con memoria):
-//      Usa il BFS sulla mappa conosciuta (beliefs.mapTiles) per
-//      trovare il percorso ottimale ed evitare muri.
-//      Fa fallback a blindMoveTo se la zona è inesplorata.
-//      Funzioni: navigateTo
-//
-//   3. ESPLORAZIONE:
-//      Movimento casuale per scoprire nuove zone.
-//      Funzioni: exploreRandomStep
-//
-// RIUSO:
-//   - blindStep/blindMoveTo: logica di movimento da blind_pick.js
-//     (blindMove) e blind_move.js, adattata per aggiornare beliefs.me
-//   - navigateTo: utilizza bfsPath da basic_functions.js
-//   - exploreRandomStep: logica di fallback da main.js originale
+// INTERFACCIA PUBBLICA (identica alla versione precedente → plans.js
+// non richiede modifiche):
+//   navigateTo(me, target, socket, walkableTiles, shouldStop, retryLimit)
+//     → Promise<'reached' | 'stopped' | 'failed'>
 // =============================================================
 
-import { getDirection, bfsPath } from './basic_functions.js';
+import { getDirection } from './basic_functions.js';
 
 // =============================================================
-// MODALITÀ BLIND (senza memoria della mappa)
+// A* PATHFINDING
 // =============================================================
 
 /**
- * Esegue UN SOLO passo verso il target in modo greedy.
- * Non conosce la mappa: se c'è un muro, il server rifiuterà il movimento.
+ * Euristica di Manhattan: distanza minima garantita su griglia 4-connessa.
+ * Ammissibile (non sovrastima mai) → A* è ottimale.
  *
- * RIUSO: logica di selezione direzione da blind_pick.js (blindMove):
- *   if (me.x < target.x) emitMove('right') ecc.
- *   Aggiunta la gestione dell'errore e l'aggiornamento di me.x/me.y.
- *
- * @param {{x:number, y:number, name:string}} me
- *        Oggetto agente. Viene modificato in-place con la nuova posizione.
- * @param {{x:number, y:number}} target  Cella obiettivo
- * @param {Object} socket                Socket Deliveroo
- * @returns {Promise<boolean>}           true se il movimento ha avuto successo
+ * @param {{x:number, y:number}} a
+ * @param {{x:number, y:number}} b
+ * @returns {number}
  */
-export async function blindStep(me, target, socket) {
-    const direction = getDirection(me, target);
-    if (!direction) return true; // già nella cella target
-
-    // IMPORTANTE: emitMove ritorna {x, y} in caso di successo,
-    // oppure FALSE in caso di fallimento (muro, collisione, ecc.).
-    // NON lancia eccezioni → non usare try/catch per rilevare i fallimenti.
-    const result = await socket.emitMove(direction);
-
-    if (result && result.x != null) {
-        // Successo: aggiorna la posizione con le coordinate confermate dal server
-        me.x = result.x;
-        me.y = result.y;
-        return true;
-    }
-
-    // result === false → movimento rifiutato dal server
-    console.warn(`[MOVES] blindStep: movimento ${direction} rifiutato dal server`);
-    return false;
+function heuristic(a, b) {
+    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
 /**
- * Naviga verso il target in modo greedy, passo dopo passo,
- * senza usare la mappa. Chiama blindStep in loop.
- *
- * Gestisce lo stallo: se l'agente non si muove per 3 passi consecutivi,
- * rinuncia (probabilmente è bloccato da un muro o un altro agente).
- *
- * RIUSO: struttura del while da blind_move.js (loop con check me.x/me.y vs target).
- *
- * @param {{x:number, y:number}} me
- * @param {{x:number, y:number}} target
- * @param {Object} socket
- * @param {number} [maxSteps=50]   Limite passi per evitare loop infiniti
- * @returns {Promise<boolean>}     true se target raggiunto
+ * Coda con priorità minima (min-heap) basata su array ordinato.
+ * Sufficiente per mappe Deliveroo (dimensione tipica ≤ 50×50).
+ * Per mappe molto grandi si potrebbe sostituire con un heap binario.
  */
-export async function blindMoveTo(me, target, socket, maxSteps = 50) {
-    let stuckCount = 0;
+class MinHeap {
+    #data = [];
 
-    for (let step = 0; step < maxSteps; step++) {
-        // Controllo di arrivo
-        if (Math.round(me.x) === Math.round(target.x) &&
-            Math.round(me.y) === Math.round(target.y)) {
-            return true;
-        }
+    push(item) {
+        this.#data.push(item);
+        // Inserimento ordinato per f (costo stimato totale)
+        this.#data.sort((a, b) => a.f - b.f);
+    }
 
-        const prevX = me.x;
-        const prevY = me.y;
+    pop() {
+        return this.#data.shift();
+    }
 
-        const moved = await blindStep(me, target, socket);
+    get size() {
+        return this.#data.length;
+    }
+}
 
-        if (!moved || (me.x === prevX && me.y === prevY)) {
-            stuckCount++;
-            if (stuckCount >= 3) {
-                console.warn(`[MOVES] blindMoveTo: agente bloccato dopo ${step + 1} passi`);
-                return false;
+/**
+ * Trova il percorso ottimale da start a goal con l'algoritmo A*.
+ *
+ * Rispetto al BFS precedente:
+ *   - BFS esplora i nodi in ordine di numero di passi (anelli concentrici)
+ *   - A* esplora prima i nodi che si avvicinano al goal → meno nodi visitati,
+ *     risposta più rapida specialmente su mappe grandi o con molti ostacoli
+ *
+ * @param {{x:number, y:number}} start
+ * @param {{x:number, y:number}} goal
+ * @param {Map<string, {type:string|number}>} walkableTiles
+ *        beliefs.mapTiles — chiave "x_y", valore {type}.
+ *        type '0' o 0 → non percorribile.
+ * @returns {{x:number, y:number}[] | null}
+ *        Percorso da start (escluso) a goal (incluso),
+ *        array vuoto se già a destinazione,
+ *        null se il goal non è raggiungibile.
+ */
+
+/*
+1. Metti start in open con f = h(start, goal)
+2. Finché open non è vuoto:
+   a. Estrai il nodo current con f minore
+   b. Se current == goal → ricostruisci e restituisci il percorso
+   c. Metti current in closed (non riesaminarlo)
+   d. Per ogni vicino (su/giù/sinistra/destra):
+      - Salta se già in closed
+      - Salta se la tile non esiste in mappa o è type '0'
+      - Calcola tentativeG = gScore[current] + 1
+      - Se tentativeG < gScore[vicino] (percorso migliore trovato):
+          - Aggiorna gScore[vicino]
+          - Salva cameFrom[vicino] = current
+          - Aggiungi vicino a open con f = tentativeG + h(vicino, goal)
+3. Se open si svuota → return null (irraggiungibile) */
+
+function aStarPath(start, goal, walkableTiles) {
+    const key  = (x, y) => `${Math.round(x)}_${Math.round(y)}`;
+    const sx   = Math.round(start.x);
+    const sy   = Math.round(start.y);
+    const gx   = Math.round(goal.x);
+    const gy   = Math.round(goal.y);
+
+    const startKey = key(sx, sy);
+    const goalKey  = key(gx, gy);
+
+    if (startKey === goalKey) return [];
+
+    // g(n) = costo reale dal nodo start al nodo n (numero di passi)
+    const gScore = new Map();
+    gScore.set(startKey, 0);
+
+    // Per ricostruire il percorso a ritroso
+    const cameFrom = new Map();
+
+    const open = new MinHeap();
+    open.push({
+        x: sx,
+        y: sy,
+        f: heuristic({ x: sx, y: sy }, { x: gx, y: gy }),
+        key: startKey,
+    });
+
+    const closed = new Set();
+
+    while (open.size > 0) {
+        const current = open.pop();
+
+        if (current.key === goalKey) {
+            // Ricostruisce il percorso: goal → start, poi inverte
+            const path = [];
+            let cur = current.key;
+            while (cur !== startKey) {
+                const node = cameFrom.get(cur);
+                path.push({ x: node.x, y: node.y });
+                cur = node.parentKey;
             }
-        } else {
-            stuckCount = 0; // reset contatore se il movimento è riuscito
+            // path ora è [nodo prima del goal, ..., nodo dopo start]
+            // aggiungiamo il goal in testa e invertiamo
+            path.unshift({ x: gx, y: gy });
+            path.reverse();
+            return path;
+        }
+
+        if (closed.has(current.key)) continue;
+        closed.add(current.key);
+
+        const neighbors = [
+            { x: current.x + 1, y: current.y },
+            { x: current.x - 1, y: current.y },
+            { x: current.x,     y: current.y + 1 },
+            { x: current.x,     y: current.y - 1 },
+        ];
+
+        for (const nb of neighbors) {
+            const nKey = key(nb.x, nb.y);
+            if (closed.has(nKey)) continue;
+
+            const tile = walkableTiles.get(nKey);
+            if (!tile) continue;                    // tile non in mappa → ostacolo
+            if (tile.type === '0' || tile.type === 0) continue; // non percorribile
+
+            const tentativeG = (gScore.get(current.key) ?? Infinity) + 1;
+
+            if (tentativeG >= (gScore.get(nKey) ?? Infinity)) continue;
+
+            // Percorso migliore trovato per nb
+            gScore.set(nKey, tentativeG);
+            cameFrom.set(nKey, { x: nb.x, y: nb.y, parentKey: current.key });
+
+            open.push({
+                x: nb.x,
+                y: nb.y,
+                f: tentativeG + heuristic(nb, { x: gx, y: gy }),
+                key: nKey,
+            });
         }
     }
 
-    console.warn(`[MOVES] blindMoveTo: raggiunto limite di ${maxSteps} passi`);
-    return false;
+    // Nessun percorso trovato
+    return null;
 }
 
 // =============================================================
-// MODALITÀ SMART (con memoria della mappa / BFS)
+// NAVIGAZIONE PRINCIPALE
 // =============================================================
 
 /**
- * Naviga verso il target usando il percorso ottimale calcolato con BFS
- * sulla mappa conosciuta (beliefs.mapTiles).
+ * Naviga verso target usando A* sulla mappa completa (beliefs.mapTiles).
  *
  * Flusso:
- *   1. Chiama bfsPath per trovare il percorso sulla mappa nota
- *   2. Se BFS fallisce (zona inesplorata) → fallback a blindMoveTo
+ *   1. Calcola il percorso A* sulla mappa nota
+ *   2. Se A* fallisce (target irraggiungibile) → restituisce 'failed'
+ *      (non c'è fallback blind perché la mappa è sempre nota per intero)
  *   3. Esegue il percorso passo per passo
- *   4. Dopo ogni passo, controlla shouldStop() per l'intention revision
- *   5. Se un passo fallisce (agente in mezzo) → ricalcola il percorso
- *
- * Il parametro shouldStop() permette all'IntentionRevision di
- * interrompere la navigazione quando arriva un'intenzione più urgente.
+ *   4. Dopo ogni passo controlla shouldStop() per l'intention revision
+ *   5. Se un passo viene rifiutato dal server (altro agente in mezzo)
+ *      → ricalcola A* dalla posizione corrente (fino a retryLimit volte)
  *
  * @param {{x:number, y:number}} me
  *        Oggetto agente. Aggiornato in-place ad ogni passo.
  * @param {{x:number, y:number}} target
- *        Cella obiettivo
+ *        Cella obiettivo.
  * @param {Object} socket
- *        Socket Deliveroo
- * @param {Map<string, {x:number, y:number, type:string|number}>} walkableTiles
- *        Mappa delle tile note (beliefs.mapTiles)
+ *        Socket Deliveroo.
+ * @param {Map<string, {type:string|number}>} walkableTiles
+ *        beliefs.mapTiles.
  * @param {Function} [shouldStop]
- *        Callback: se ritorna true, la navigazione viene interrotta.
+ *        Callback: se ritorna true, interrompe la navigazione.
  *        Usato dall'IntentionRevision per la deliberazione continua.
  * @param {number} [retryLimit=3]
- *        Quante volte ricalcolare il percorso in caso di blocco
- * @returns {Promise<'reached'|'stopped'|'failed'>}
+ *        Quante volte ricalcolare A* in caso di blocco temporaneo
+ *        (es. un agente nemico occupa momentaneamente il percorso).
+ * @returns {Promise<'reached' | 'stopped' | 'failed'>}
  */
 export async function navigateTo(
     me,
     target,
     socket,
     walkableTiles,
-    shouldStop = () => false,
-    retryLimit = 3
+    shouldStop  = () => false,
+    retryLimit  = 3,
 ) {
-    console.log(`[MOVES] navigateTo: (${Math.round(me.x)},${Math.round(me.y)}) → (${target.x},${target.y})`);
+    console.log(`[MOVES] navigateTo A*: (${Math.round(me.x)},${Math.round(me.y)}) → (${target.x},${target.y})`);
 
     for (let attempt = 0; attempt < retryLimit; attempt++) {
 
-        // --- 1. Calcola percorso BFS ---
-        const path = bfsPath(me, target, walkableTiles);
+        // --- 1. Calcola percorso A* ---
+        const path = aStarPath(me, target, walkableTiles);
 
-        if (!path) {
-            // Zona inesplorata o non raggiungibile → fallback blind
-            console.warn(`[MOVES] BFS senza percorso (tentativo ${attempt + 1}), uso blindMoveTo`);
-            const ok = await blindMoveTo(me, target, socket);
-            return ok ? 'reached' : 'failed';
+        if (path === null) {
+            console.warn(`[MOVES] A*: target (${target.x},${target.y}) non raggiungibile`);
+            return 'failed';
         }
 
         if (path.length === 0) {
-            return 'reached'; // già a destinazione
+            console.log(`[MOVES] A*: già a destinazione`);
+            return 'reached';
         }
+
+        console.log(`[MOVES] A* (tentativo ${attempt + 1}): percorso di ${path.length} passi`);
 
         // --- 2. Esegui il percorso passo per passo ---
         let pathBroken = false;
 
         for (const nextCell of path) {
+
             // Controlla se l'IntentionRevision vuole fermarci
             if (shouldStop()) {
                 console.log(`[MOVES] navigateTo interrotto da shouldStop()`);
@@ -183,63 +256,33 @@ export async function navigateTo(
             }
 
             const direction = getDirection(me, nextCell);
-            if (!direction) continue; // cella già raggiunta (overlap)
+            if (!direction) continue; // celle coincidenti (float rounding)
 
-            // emitMove ritorna {x,y} in caso di successo, FALSE in caso di fallimento.
-            // NON lancia eccezioni → nessun try/catch necessario.
+            // emitMove → {x, y} se ok, false se rifiutato (muro o collisione)
+            // NON lancia eccezioni → nessun try/catch
             const result = await socket.emitMove(direction);
 
             if (result && result.x != null) {
                 me.x = result.x;
                 me.y = result.y;
             } else {
-                // false → cella bloccata da agente o muro → ricalcola percorso
-                console.warn(`[MOVES] Passo verso ${direction} rifiutato, ricalcolo percorso`);
+                console.warn(`[MOVES] Passo verso ${direction} rifiutato — ricalcolo A* (tentativo ${attempt + 1})`);
                 pathBroken = true;
                 break;
             }
         }
 
         if (!pathBroken) {
-            // Percorso completato
             const arrived = Math.round(me.x) === Math.round(target.x) &&
                             Math.round(me.y) === Math.round(target.y);
             return arrived ? 'reached' : 'failed';
         }
 
-        // Il percorso si è spezzato: ritenta dal tentativo successivo
-        // (il BFS verrà ricalcolato con la posizione aggiornata di me)
+        // Percorso spezzato: al prossimo tentativo A* riparte dalla
+        // posizione aggiornata di me, trovando un percorso alternativo
+        // che aggira l'agente bloccante
     }
 
-    console.warn(`[MOVES] navigateTo: esauriti i tentativi di ricalcolo`);
+    console.warn(`[MOVES] navigateTo: esauriti ${retryLimit} tentativi A*`);
     return 'failed';
-}
-
-// =============================================================
-// ESPLORAZIONE
-// =============================================================
-
-/**
- * Muove l'agente in una direzione casuale per esplorare zone sconosciute.
- * Non garantisce il movimento (potrebbe colpire un muro).
- *
- * RIUSO: logica di fallback da main.js originale:
- *   "const randomDir = directions[Math.floor(Math.random() * directions.length)]"
- *
- * Usata in: plans.js (piano Explore)
- *
- * @param {Object} socket
- * @param {{x:number, y:number}} me  Aggiornato in-place se il movimento riesce
- * @returns {Promise<void>}
- */
-export async function exploreRandomStep(socket, me) {
-    const directions = ['up', 'down', 'left', 'right'];
-    const randomDir  = directions[Math.floor(Math.random() * directions.length)];
-
-    // emitMove ritorna {x,y} o false — non lancia eccezioni
-    const result = await socket.emitMove(randomDir);
-    if (result && result.x != null) {
-        me.x = result.x;
-        me.y = result.y;
-    }
 }
