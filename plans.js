@@ -1,7 +1,7 @@
 // plans.js — Piani eseguibili. Il socket viene passato nel costruttore.
-
 import { beliefs } from './beliefs.js';
-import { navigateTo, exploreRandomStep } from './moves.js';
+import { navigateTo } from './moves.js';  
+import { smartDist } from './basic_functions.js';
 
 class PlanBase {
     #stopped = false;
@@ -63,17 +63,45 @@ export class Deliver extends PlanBase {
     }
 }
 
-export class Explore extends PlanBase {
+export class WaitAtSpawn extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
     static isApplicableTo(action) { return action === 'explore'; }
+    //                                      ↑ stessa stringa: options.js non va toccato
 
     async execute() {
         if (this.stopped) throw ['stopped'];
-        await exploreRandomStep(this.#socket, beliefs.me);
+
+        // Trova la tile di spawn (type '1') più vicina a me
+        const spawnTiles = [...beliefs.mapTiles.entries()]
+            .filter(([_, t]) => t.type === '1' || t.type === 1)
+            .map(([key, _]) => {
+                const [x, y] = key.split('_').map(Number);
+                return { x, y };
+            });
+
+        if (spawnTiles.length === 0) {
+            // Mappa senza tile di spawn: aspetta ferma
+            await new Promise(r => setTimeout(r, 300));
+            return true;
+        }
+
+        const nearest = spawnTiles.reduce((best, t) =>
+            smartDist(beliefs.me, t) < smartDist(beliefs.me, best) ? t : best
+        );
+
+        console.log(`[PLANS] WaitAtSpawn → (${nearest.x},${nearest.y})`);
+
+        const nav = await navigateTo(
+            beliefs.me, nearest, this.#socket, beliefs.mapTiles, this.shouldStop
+        );
+
+        if (nav === 'stopped') throw ['stopped'];
+
+        // Arrivati sulla tile di spawn: breve pausa prima di ricontrollare
+        await new Promise(r => setTimeout(r, 300));
         return true;
     }
 }
 
-// Libreria piani: ordine = priorità di applicazione
-export const planLibrary = [GoPickUp, Deliver, Explore];
+export const planLibrary = [GoPickUp, Deliver, WaitAtSpawn];

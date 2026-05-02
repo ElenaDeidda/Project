@@ -2,12 +2,20 @@
 import { beliefs, getKnownAgentPositions } from './beliefs.js';
 import { smartDist, scoreParcel } from './basic_functions.js';
 
+// scoreParcel assolutamente da rivedere
+
+
 /**
  * Genera le opzioni disponibili in base ai beliefs correnti.
  * Ogni opzione è un predicate: ['go_pick_up', x, y, id, score]
  *                               ['deliver', x, y, dist]
  *                               ['explore']
  */
+
+// IMPORTANTE
+
+// GESTIRE OPZIONE PIù PACCHI
+
 export function generateOptions() {
     const options        = [];
     const agentPositions = getKnownAgentPositions();
