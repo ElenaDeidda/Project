@@ -3,6 +3,34 @@ import { beliefs } from './beliefs.js';
 import { navigateTo } from './moves.js';  
 import { smartDist } from './basic_functions.js';
 
+
+/*options.js                  intentions.js              plans.js
+──────────                  ─────────────              ────────
+generateOptions()
+deliberate()
+  → ['go_pick_up',4,3,'p1'] ──push()──→ IntentionRevision
+                                            │
+                                        IntentionDeliberation.achieve()
+                                            │ scorre planLibrary
+                                            │ GoPickUp.isApplicableTo('go_pick_up') → true
+                                            │
+                                        new GoPickUp(socket)
+                                        .execute('go_pick_up', 4, 3, 'p1')
+                                            │
+                                            ├─ navigateTo → moves.js
+                                            ├─ emitPickup → server
+                                            └─ return true
+                                            
+  → nuovo sensing → nuova delibera ──push()──→ ... */
+
+/*
+PlanBase          ← classe base condivisa (gestione stop)
+  ├── GoPickUp    ← va al pacco e lo raccoglie
+  ├── Deliver     ← va al delivery point e deposita
+  └── WaitAtSpawn ← fallback (aspetta nel punto di spawn)
+
+planLibrary       ← array esportato, usato da intentions.js */
+
 class PlanBase {
     #stopped = false;
     get stopped()    { return this.#stopped; }
@@ -15,9 +43,10 @@ export class GoPickUp extends PlanBase {
     constructor(socket) { super(); this.#socket = socket; }
     static isApplicableTo(action) { return action === 'go_pick_up'; }
 
-    async execute(action, x, y, id) {
+    async execute(_action, x, y, id) {
         if (this.stopped) throw ['stopped'];
 
+        // Verifica pre-navigazione: il pacco esiste ed è libero?
         const parcel = beliefs.parcels.get(id);
         if (!parcel || parcel.carriedBy) throw [`Pacco ${id} non disponibile`];
 
@@ -26,6 +55,11 @@ export class GoPickUp extends PlanBase {
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
         if (this.stopped) throw ['stopped'];
+
+        // Verifica post-navigazione: il pacco potrebbe essere sparito
+        // o essere stato raccolto da un nemico mentre camminavi
+        const freshParcel = beliefs.parcels.get(id);
+        if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito durante la navigazione`];
 
         // emitPickup() → [{id, x, y, carriedBy, reward}, ...]
         const picked = await this.#socket.emitPickup();
@@ -43,8 +77,12 @@ export class Deliver extends PlanBase {
     constructor(socket) { super(); this.#socket = socket; }
     static isApplicableTo(action) { return action === 'deliver'; }
 
-    async execute(action, x, y) {
+    async execute(_action, x, y) {
         if (this.stopped) throw ['stopped'];
+
+        // Guard: inutile navigare se non abbiamo nulla da consegnare
+        if (!beliefs.carrying && beliefs.carriedParcels.length === 0)
+            throw ['Deliver chiamato senza pacchi da consegnare'];
 
         console.log(`[PLANS] Deliver → (${x},${y})`);
         const nav = await navigateTo(beliefs.me, {x, y}, this.#socket, beliefs.mapTiles, this.shouldStop);
