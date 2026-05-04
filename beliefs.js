@@ -7,12 +7,11 @@ export const beliefs = {
     mapTiles:      new Map(),
     deliveryPoints:[],
     parcels:       new Map(),
-    agentHistory:  new Map(),
+    agents:        new Map(),   // id → { x, y, moving, direction, targetX, targetY }
     carrying:      false,
     carriedParcels:[],
 };
 
-/* @type { Map< string, {id: string, carriedBy?: string, x:number, y:number, reward:number} > }*/
 export function updateConfig(config) {
     beliefs.config = config;
 }
@@ -20,11 +19,11 @@ export function updateConfig(config) {
 export function updateMap(width, height, tiles) {
     for (const tile of tiles) {
         const key = `${tile.x}_${tile.y}`;
-        beliefs.mapTiles.set(key, {type: tile.type });
-
-        if (tile.type === '2') {
+        beliefs.mapTiles.set(key, { type: tile.type });
+       if (tile.type === 2) {
             beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });
-        }
+       }
+
     }
 }
 
@@ -32,8 +31,12 @@ export function updateSensing(sensing) {
     beliefs.parcels.clear();
     for (const p of sensing.parcels) {
         if (!p.carriedBy || p.carriedBy === beliefs.me.id) {
-            // con l'if evitiamo di inserire nei beliefs i pacchi che stanno portando gli altri agenti, di cui non conosciamo la posizione esatta
-            beliefs.parcels.set(p.id, { id: p.id, x: p.x, y: p.y, reward: p.reward, carriedBy: p.carriedBy ?? null });
+            // Evitiamo di inserire nei beliefs i pacchi portati da altri agenti,
+            // di cui non conosciamo la posizione esatta.
+            beliefs.parcels.set(p.id, {
+                id: p.id, x: p.x, y: p.y,
+                reward: p.reward, carriedBy: p.carriedBy ?? null
+            });
         }
     }
     console.log(`[updateSensing] parcels visibili:`, beliefs.parcels.size);
@@ -44,80 +47,100 @@ export function updateSensing(sensing) {
     beliefs.carriedParcels = mine;
     console.log(`[updateSensing] carrying:`, beliefs.carrying);
     console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
+
+    // Aggiorna la mappa degli agenti avversari visibili
+    updateAgents(sensing.agents ?? []);
 }
 
-/*function _updateAgentHistory(agents) {
-    const now     = Date.now();
-    const obsDist = beliefs.config?.GAME?.player?.observation_distance ?? 5;
-    const seenIds = new Set(agents.map(a => a.id));
+/**
+ * Aggiorna beliefs.agents con lo stato corrente degli agenti visibili.
+ *
+ * Sfrutta la meccanica del server: quando un agente si sposta da (x,y)
+ * a una cella adiacente, il server manda prima x±0.6 (in transito) e poi
+ * x±1.0 (arrivato). Dalla parte decimale deduciamo direzione e cella target
+ * senza bisogno di storia.
+ *
+ * Struttura salvata per ogni agente:
+ *   { x, y, moving, direction, targetX, targetY }
+ *
+ *   - moving:    true se x o y non è intero (agente in transito tra due tile)
+ *   - direction: 'right'|'left'|'up'|'down'|'none'
+ *   - targetX/Y: cella intera verso cui sta andando (= arrotondata se fermo)
+ *
+ * @param {Array} agents  sensing.agents dal server
+ */
+export function updateAgents(agents) {
+    beliefs.agents.clear();
 
     for (const a of agents) {
-        //continue salta alla prossima iterazione del ciclo, mentre break esce completamente dal ciclo. 
-        // Qui usiamo continue perché vogliamo semplicemente ignorare gli agenti in movimento e non aggiungerli alla storia,
-        //  ma continuare a processare gli altri agenti visibili. 
-        if (isMoving(a)) continue;
-        //Caso A - Nuovo agente visto per la prima volta: lo aggiungo alla storia
-        if (!beliefs.agentHistory.has(a.id)) {
-            beliefs.agentHistory.set(a.id, [{ name: a.name, x: a.x, y: a.y, timestamp: now, direction: 'none' }]);
-            console.log(`[agentHistory] NUOVO agente "${a.name}" (${a.id}) @ (${a.x},${a.y})`);
-            // Se l'agente è molto vicino ma non è stato visto prima, potrebbe essere un agente già noto che è entrato nel raggio di osservazione dopo essere stato lost. In questo caso, lo tracciamo comunque, ma con una nota speciale.
-        } else {
-            const history = beliefs.agentHistory.get(a.id);
-            const last    = history[history.length - 1];
-            const prev    = typeof last === 'object' ? last : _findLastKnownPos(history);
-            let dir = 'none';
-            // Caso B - Agente già visto: se si è mosso, aggiorno la storia con la nuova posizione e direzione
-            if (prev) {
-                if (prev.x < a.x) dir = 'right';
-                else if (prev.x > a.x) dir = 'left';
-                else if (prev.y < a.y) dir = 'up';
-                else if (prev.y > a.y) dir = 'down';
-            }
-            // Se la posizione è cambiata, aggiungo un nuovo record; altrimenti, aggiorno il timestamp dell'ultimo record
-            if (typeof last === 'object') {
-                // Se l'agente era fermo e ora è in movimento, o viceversa, o se è cambiata la posizione, aggiungo un nuovo record
-                if (last.x !== a.x || last.y !== a.y) {
-                    history.push({ name: a.name, x: a.x, y: a.y, timestamp: now, direction: dir });
-                    console.log(`[agentHistory] MOSSO "${a.name}" (${a.id}) → (${a.x},${a.y}) dir:${dir}`);
-                } else {
-                    console.log(`[agentHistory] FERMO "${a.name}" (${a.id}) @ (${a.x},${a.y})`);
-                }
-            } else {
-                history.push({ name: a.name, x: a.x, y: a.y, timestamp: now, direction: dir });
-                console.log(`[agentHistory] RIAPPARSO "${a.name}" (${a.id}) @ (${a.x},${a.y}) dir:${dir}`);
-            }
+        // x/y possono essere undefined se il server non li manda (caso raro)
+        if (a.x == null || a.y == null) continue;
+
+        const fracX = a.x % 1;
+        const fracY = a.y % 1;
+        const moving = fracX !== 0 || fracY !== 0;
+
+        let direction = 'none';
+        let targetX   = Math.round(a.x);
+        let targetY   = Math.round(a.y);
+
+        if (moving) {
+            // Il server usa 0.6 per il primo step e 0.4 per il completamento.
+            // fracX > 0.5  → si sta spostando verso destra  (es. 3.6 → target 4)
+            // fracX tra 0 e 0.5 → stava andando a sinistra (es. 3.4 → target 3)
+            // Stesso ragionamento per Y (up = y crescente, down = y decrescente).
+            if (fracX > 0.5)       { direction = 'right'; targetX = Math.floor(a.x) + 1; }
+            else if (fracX > 0)    { direction = 'left';  targetX = Math.floor(a.x);     }
+            else if (fracY > 0.5)  { direction = 'up';    targetY = Math.floor(a.y) + 1; }
+            else if (fracY > 0)    { direction = 'down';  targetY = Math.floor(a.y);     }
         }
+
+        beliefs.agents.set(a.id, {
+            x: a.x, y: a.y,
+            moving, direction,
+            targetX, targetY,
+        });
+
+        console.log(`[updateAgents] "${a.name}" (${a.id}) @ (${a.x},${a.y}) moving:${moving} dir:${direction} → target:(${targetX},${targetY})`);
     }
 
-    for (const [id, history] of beliefs.agentHistory.entries()) {
-        if (seenIds.has(id)) continue;
-        const last = history[history.length - 1];
-        const lastKnown = _findLastKnownPos(history);
-        if (typeof last === 'object') {
-            history.push('lost');
-            console.log(`[agentHistory] LOST agente (${id}), ultima pos: (${lastKnown?.x},${lastKnown?.y}) — probabilmente in movimento`);
-        } else if (lastKnown && smartDist(beliefs.me, lastKnown) < obsDist) {
-            beliefs.agentHistory.delete(id);
-            console.log(`[agentHistory] RIMOSSO agente (${id}), era lost e dentro obs range`);
-        }
+    console.log(`[updateAgents] agenti tracciati:`, beliefs.agents.size);
+}
+
+/**
+ * Restituisce un Set di chiavi "x_y" delle celle attualmente bloccate
+ * dagli agenti avversari: sia la cella in cui si trovano ora,
+ * sia quella verso cui stanno andando.
+ *
+ * Usato da aStarPath in moves.js per escludere queste celle dal percorso.
+ *
+ * @returns {Set<string>}
+ */
+export function getBlockedCells() {
+    const blocked = new Set();
+    for (const a of beliefs.agents.values()) {
+        blocked.add(`${Math.round(a.x)}_${Math.round(a.y)}`); // cella corrente (arrotondata)
+        blocked.add(`${a.targetX}_${a.targetY}`);              // cella di destinazione
     }
-
-    console.log(`[agentHistory] agenti tracciati:`, beliefs.agentHistory.size);
+    console.log(`[getBlockedCells] celle bloccate:`, blocked.size);
+    return blocked;
 }
 
-function _findLastKnownPos(history) {
-    for (let i = history.length - 1; i >= 0; i--)
-        if (typeof history[i] === 'object') return history[i];
-    return null;
-}
-*/
-
-export function getKnownAgentPositions() {
+/**
+ * Restituisce un array di posizioni {x, y} degli agenti avversari noti
+ * (posizione intera corrente + target se in movimento).
+ *
+ * Usato da scoreParcel in options.js per penalizzare i pacchi
+ * vicini ad agenti avversari.
+ *
+ * @returns {{x:number, y:number}[]}
+ */
+export function getAgentPositions() {
     const out = [];
-    for (const history of beliefs.agentHistory.values()) {
-        const last = history[history.length - 1];
-        if (typeof last === 'object') out.push({ x: last.x, y: last.y });
+    for (const a of beliefs.agents.values()) {
+        out.push({ x: Math.round(a.x), y: Math.round(a.y) });
+        if (a.moving) out.push({ x: a.targetX, y: a.targetY });
     }
-    console.log(`[getKnownAgentPositions] posizioni note:`, out);
+    console.log(`[getAgentPositions] posizioni note:`, out);
     return out;
 }
