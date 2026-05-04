@@ -8,6 +8,7 @@ export function generateOptions() {
     // 1. Cerca pacchi SEMPRE, a meno che lo "zaino" non sia pieno (es. limite di 3 pacchi)
     if (beliefs.carriedParcels.length < 3) {
         for (const [id, parcel] of beliefs.parcels.entries()) {
+            console.log("parcel.carriedBy: ", parcel.carriedBy)
             if (parcel.carriedBy) continue;
             const score = scoreParcel(beliefs.me, parcel); 
             options.push(['go_pick_up', parcel.x, parcel.y, id, score]);
@@ -23,7 +24,7 @@ export function generateOptions() {
 
     // 3. Se non ci sono opzioni utili, la priorità diventa pattugliare le zone di spawn
     options.push(['patrol_spawn']);
-    
+    console.log("[Options to choose between]: ", options)
     return options;
 }
 
