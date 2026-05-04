@@ -128,6 +128,6 @@ export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0) => {
             break;
         }
     }
- 
+    console.log(`[scoreParcel] parcel ${parcel.id} at (${parcel.x},${parcel.y}) with reward ${reward}: score = ${score.toFixed(2)} (myDist=${myDist}, deliveryDist=${deliveryDist})`);
     return score;
 };

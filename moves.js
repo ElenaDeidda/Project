@@ -149,7 +149,7 @@ function aStarPath(start, goal, walkableTiles, blocked) {
             // Tile non in mappa o non percorribile → ostacolo statico
             const tile = walkableTiles.get(nKey);
             if (!tile) continue;
-            if ( tile.type == 0) continue;
+            if ( tile.type === 0 || tile.type === '0' ) continue; //  se è un muro spostato o un ostacolo naturale
 
             // Cella occupata da un agente avversario → ostacolo dinamico
             // Non blocchiamo la cella goal: se l'agente si sposta prima che
@@ -165,7 +165,7 @@ function aStarPath(start, goal, walkableTiles, blocked) {
 
             open.push({
                 x: nb.x, y: nb.y,
-                f: tentativeG + heuristic(nb, { x: gx, y: gy }),
+                f: tentativeG + heuristic(nb, goal),
                 key: nKey,
             });
         }

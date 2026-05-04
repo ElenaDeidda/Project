@@ -20,7 +20,9 @@ export function updateMap(width, height, tiles) {
     for (const tile of tiles) {
         const key = `${tile.x}_${tile.y}`;
         beliefs.mapTiles.set(key, { type: tile.type });
-       if (tile.type === 2) {
+       if (tile.type == '2') {
+            console.log("[BELIEFS] ****************");
+
             beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });
        }
 
