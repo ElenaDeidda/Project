@@ -112,7 +112,7 @@ export class WaitAtSpawn extends PlanBase {
 
         // Trova la tile di spawn (type '1') più vicina a me
         const spawnTiles = [...beliefs.mapTiles.entries()]
-            .filter(([_, t]) => t.type === '1' || t.type === 1)
+            .filter(([_, t]) => t.type === 1)
             .map(([key, _]) => {
                 const [x, y] = key.split('_').map(Number);
                 return { x, y };

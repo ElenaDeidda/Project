@@ -1,5 +1,5 @@
 // options.js — Generazione opzioni e deliberazione
-import { beliefs, getKnownAgentPositions } from './beliefs.js';
+import { beliefs, getAgentPositions } from './beliefs.js';
 import { smartDist, scoreParcel, nearestDeliveryDist } from './basic_functions.js';
 // scoreParcel assolutamente da rivedere
 
@@ -19,8 +19,11 @@ import { smartDist, scoreParcel, nearestDeliveryDist } from './basic_functions.j
 // IMPORTANTE: GESTIRE OPZIONE PIÙ PACCHI
 
 export function generateOptions() {
-    const options        = [];
-    const agentPositions = getKnownAgentPositions();
+    const options        = []
+    // getAgentPositions restituisce le posizioni intere degli agenti avversari
+    // (posizione corrente + cella target se in movimento).
+    // Passate a scoreParcel per penalizzare i pacchi vicini ad avversari.
+    const agentPositions = getAgentPositions();
 
     // Doppio controllo: protegge dal desync server/beliefs
     const isCarrying = beliefs.carrying || beliefs.carriedParcels.length > 0;
