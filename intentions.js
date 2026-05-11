@@ -1,27 +1,6 @@
 // intentions.js — IntentionRevision e IntentionDeliberation.
 // Il socket viene passato nel costruttore e inoltrato ai piani.
 
-/**sensing → deliberate() → ['go_pick_up', 4, 3, 'p1']
-  │
-  └── agent.push(['go_pick_up', 4, 3, 'p1'])
-        key = 'go_pick_up_4_3_p1'
-        #isRunning = false → non ignora
-        crea IntentionDeliberation, avvia achieve() in background
-        push() ritorna subito
-
-        [nel frattempo, achieve() sta navigando verso (4,3)]
-
-sensing → deliberate() → ['go_pick_up', 4, 3, 'p1']  (stesso pacco)
-  └── agent.push(...)
-        key = 'go_pick_up_4_3_p1' === #currentKey → return  ← ignorato
-
-sensing → deliberate() → ['go_pick_up', 7, 1, 'p2']  (pacco migliore!)
-  └── agent.push(...)
-        key = 'go_pick_up_7_1_p2' ≠ #currentKey
-        #current.stop()  ← ferma la navigazione verso p1
-        crea nuova IntentionDeliberation per p2
-        avvia achieve() in background */
-
 import { planLibrary } from './plans.js';
 
 export class IntentionRevision {
@@ -87,7 +66,6 @@ class IntentionDeliberation {
             if (this.#stopped) throw ['stopped'];
             if (!PlanClass.isApplicableTo(...this.#predicate)) continue;
 
-            // Il socket viene passato al costruttore del piano
             this.#currentPlan = new PlanClass(this.#socket);
             try {
                 return await this.#currentPlan.execute(...this.#predicate);
@@ -101,7 +79,8 @@ class IntentionDeliberation {
 }
 
 function _predicateKey(p) {
-    if (p[0] === 'go_pick_up') return `${p[0]}_${p[1]}_${p[2]}_${p[3]}`;
-    if (p[0] === 'deliver')    return `${p[0]}_${p[1]}_${p[2]}`;
+    if (p[0] === 'go_pick_up')  return `${p[0]}_${p[1]}_${p[2]}_${p[3]}`;
+    if (p[0] === 'deliver')     return `${p[0]}_${p[1]}_${p[2]}`;
+    if (p[0] === 'go_to_spawn') return p[1] != null ? `${p[0]}_${p[1]}_${p[2]}` : p[0];
     return p[0];
 }
