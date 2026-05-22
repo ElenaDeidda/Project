@@ -5,6 +5,7 @@ export const beliefs = {
     me:             { id: '', name: '', x: 0, y: 0, score: 0 },
     config:         {},
     mapTiles:       new Map(),
+    isDirectionalMap: false,
     deliveryPoints: [],
     parcels:        new Map(),
     agents:         new Map(),   // id → { x, y, moving, direction, targetX, targetY }
@@ -29,13 +30,14 @@ export function updateConfig(config) {
 
 export function updateMap(width, height, tiles) {
     // --- 1. Costruisce mapTiles e deliveryPoints ---
+    const ARROW_TYPES = new Set(['→', '←', '↑', '↓']);
     for (const tile of tiles) {
         const key = `${tile.x}_${tile.y}`;
         beliefs.mapTiles.set(key, { type: tile.type });
-        if (tile.type == '2') {
-            console.log("[BELIEFS] ****************");
-            beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });
-        }
+        if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
+        if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
+        console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
+        
     }
 
     // --- 2. Precalcola spawnVisibility ---
