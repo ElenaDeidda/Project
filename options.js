@@ -1,68 +1,99 @@
 // options.js — Generazione opzioni e deliberazione
 import { beliefs, getAgentPositions, getBlockedCells } from './beliefs.js';
-import { smartDist, scoreParcel, nearestDeliveryDist } from './basic_functions.js';
+import { smartDist, scoreParcel, nearestDeliveryDist }  from './basic_functions.js';
 
-const VISIBILITY_BONUS = 2;    // peso visibilità spawn tiles nello score
-const SPAWN_TIMEOUT    = 3000; // ms prima di abbandonare una spawn tile senza pacchi
+const VISIBILITY_BONUS = 2;
+const SPAWN_TIMEOUT    = 3000;
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+function isCarrying() {
+    return beliefs.carrying || beliefs.carriedParcels.length > 0;
+}
 
 /**
- * Genera le opzioni disponibili in base ai beliefs correnti.
- * Ogni opzione è un predicate: ['go_pick_up', x, y, id, score]
- *                               ['deliver', x, y, dist]
- *                               ['go_to_spawn', x, y, score]
+ * Restituisce true se l'agente è fermo sulla spawn tile corrente
+ * da più di SPAWN_TIMEOUT ms senza che sia spawnato nulla.
  */
-export function generateOptions() {
-    const options        = [];
-    const agentPositions = getAgentPositions();
+function isSpawnTiledOut() {
+    return beliefs.currentSpawnTile !== null
+        && beliefs.spawnArrivalTime  !== null
+        && Date.now() - beliefs.spawnArrivalTime > SPAWN_TIMEOUT;
+}
 
-    const isCarrying = beliefs.carrying || beliefs.carriedParcels.length > 0;
+/**
+ * Restituisce true se la tile (x,y) è la spawn tile andata in timeout.
+ */
+function isTimedOutTile(x, y) {
+    return isSpawnTiledOut()
+        && beliefs.currentSpawnTile.x === x
+        && beliefs.currentSpawnTile.y === y;
+}
 
-    if (!isCarrying) {
-        for (const [id, parcel] of beliefs.parcels.entries()) {
-            if (parcel.carriedBy) continue;
+// ─── sezioni di generateOptions ───────────────────────────────────────────────
 
-            const delDist = nearestDeliveryDist(parcel, beliefs.deliveryPoints);
-            const score   = scoreParcel(beliefs.me, parcel, agentPositions, delDist);
-
-            options.push(['go_pick_up', parcel.x, parcel.y, id, score]);
-        }
-    } else {
-        for (const dp of beliefs.deliveryPoints) {
-            options.push(['deliver', dp.x, dp.y, smartDist(beliefs.me, dp)]);
-        }
-    }
-
-    // --- go_to_spawn ---
-
-    // Controlla se il timeout sulla spawn tile corrente è scaduto:
-    // se l'agente è sulla stessa tile da più di SPAWN_TIMEOUT ms
-    // senza che sia spawnato nessun pacco, quella tile viene esclusa
-    // così deliberate() sceglie la prossima migliore.
-    const timedOut = beliefs.currentSpawnTile !== null &&
-                     beliefs.spawnArrivalTime  !== null &&
-                     Date.now() - beliefs.spawnArrivalTime > SPAWN_TIMEOUT;
-
-    if (timedOut) {
-        console.log(`[OPTIONS] Timeout spawn tile (${beliefs.currentSpawnTile.x},${beliefs.currentSpawnTile.y}) — cerco nuova posizione`);
-    }
-
+function buildPickupOptions(agentPositions) {
+    const options = [];
     const blocked = getBlockedCells();
 
+    for (const [id, parcel] of beliefs.parcels.entries()) {
+        // Già portato da qualcuno
+        if (parcel.carriedBy) continue;
+
+        // Tile occupata da un agente avversario: non riusciremmo a raccoglierlo
+        const key = `${Math.round(parcel.x)}_${Math.round(parcel.y)}`;
+        if (blocked.has(key)) continue;
+
+        const delDist = nearestDeliveryDist(parcel, beliefs.deliveryPoints);
+        const score   = scoreParcel(beliefs.me, parcel, agentPositions, delDist);
+
+        // Scarta subito pacchi con score negativo infinito (irraggiungibili o reward 0)
+        if (score === -Infinity) continue;
+
+        options.push(['go_pick_up', parcel.x, parcel.y, id, score]);
+    }
+
+    return options;
+}
+
+function buildDeliverOptions() {
+    // Nessun pacco da consegnare → nessuna opzione
+    if (beliefs.deliveryPoints.length === 0) return [];
+
+    return beliefs.deliveryPoints.map(dp => [
+        'deliver',
+        dp.x,
+        dp.y,
+        smartDist(beliefs.me, dp),
+    ]);
+}
+
+function buildSpawnOptions() {
+    const blocked = getBlockedCells();
+    const options = [];
+
+    if (isSpawnTiledOut()) {
+        console.log(`[OPTIONS] Timeout spawn tile ` +
+            `(${beliefs.currentSpawnTile.x},${beliefs.currentSpawnTile.y}) — cerco nuova`);
+    }
+
     for (const [key, tile] of beliefs.mapTiles.entries()) {
-        if (tile.type != '1') continue;
+        if (tile.type !== '1') continue;
+
+        // Tile occupata da un agente avversario
         if (blocked.has(key)) continue;
 
         const [x, y] = key.split('_').map(Number);
 
-        // Escludi la tile corrente se il timeout è scaduto
-        if (timedOut &&
-            beliefs.currentSpawnTile.x === x &&
-            beliefs.currentSpawnTile.y === y) continue;
+        // Esclude la tile andata in timeout
+        if (isTimedOutTile(x, y)) continue;
 
         const myDist     = smartDist(beliefs.me, { x, y });
         const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
         const visibility = beliefs.spawnVisibility.get(key) ?? 0;
-        const score      = -(myDist + delDist) + visibility * VISIBILITY_BONUS;
+
+        // Score: premia tile vicine, vicine a un delivery e con alta visibilità spawn
+        const score = -(myDist + delDist) + visibility * VISIBILITY_BONUS;
 
         options.push(['go_to_spawn', x, y, score]);
     }
@@ -70,32 +101,54 @@ export function generateOptions() {
     return options;
 }
 
+// ─── API pubblica ──────────────────────────────────────────────────────────────
+
 /**
- * Sceglie la migliore opzione.
- * 1. Consegna → delivery point più vicino
- * 2. Pickup   → pacco con score più alto (se > soglia minima)
- * 3. Spawn    → spawn tile con score più alto
- * 4. Fallback → go_to_spawn senza coordinate se tutte bloccate
+ * Genera le opzioni disponibili in base ai beliefs correnti.
+ *
+ * Casi mutualmente esclusivi:
+ *   - Se stai portando pacchi  → solo opzioni 'deliver'
+ *   - Altrimenti               → opzioni 'go_pick_up' + 'go_to_spawn'
+ */
+export function generateOptions() {
+    if (isCarrying()) {
+        return buildDeliverOptions();
+    }
+
+    const agentPositions = getAgentPositions();
+    return [
+        ...buildPickupOptions(agentPositions),
+        ...buildSpawnOptions(),
+    ];
+}
+
+/**
+ * Sceglie la migliore opzione dall'insieme generato da generateOptions().
+ *
+ * Priorità:
+ *   1. deliver  → delivery point con distanza Manhattan minima
+ *   2. go_pick_up → pacco con score massimo (se ≥ SCORE_MIN)
+ *   3. go_to_spawn → spawn tile con score massimo
+ *   4. fallback → ['go_to_spawn'] senza coordinate
  */
 export function deliberate(options) {
     const SCORE_MIN = -100;
 
-    const isCarrying = beliefs.carrying || beliefs.carriedParcels.length > 0;
+    if (isCarrying()) {
+        const delivers = options.filter(o => o[0] === 'deliver');
+        if (delivers.length > 0)
+            return delivers.reduce((best, cur) => cur[3] < best[3] ? cur : best);
+    }
 
-    const pickupOpts  = options.filter(o => o[0] === 'go_pick_up');
-    const deliverOpts = options.filter(o => o[0] === 'deliver');
-    const spawnOpts   = options.filter(o => o[0] === 'go_to_spawn');
-
-    if (isCarrying && deliverOpts.length > 0)
-        return deliverOpts.reduce((b, c) => c[3] < b[3] ? c : b);
-
-    if (pickupOpts.length > 0) {
-        const best = pickupOpts.reduce((b, c) => c[4] > b[4] ? c : b);
+    const pickups = options.filter(o => o[0] === 'go_pick_up');
+    if (pickups.length > 0) {
+        const best = pickups.reduce((b, c) => c[4] > b[4] ? c : b);
         if (best[4] >= SCORE_MIN) return best;
     }
 
-    if (spawnOpts.length > 0)
-        return spawnOpts.reduce((b, c) => c[3] > b[3] ? c : b);
+    const spawns = options.filter(o => o[0] === 'go_to_spawn');
+    if (spawns.length > 0)
+        return spawns.reduce((b, c) => c[3] > b[3] ? c : b);
 
     return ['go_to_spawn'];
 }
