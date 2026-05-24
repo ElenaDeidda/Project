@@ -8,6 +8,7 @@ export class IntentionRevision {
     #current    = null;
     #currentKey = null;
     #isRunning  = false;
+    #chain      = Promise.resolve();
 
     constructor(socket) {
         this.#socket = socket;
@@ -24,20 +25,26 @@ export class IntentionRevision {
         this.#currentKey = key;
         this.#isRunning  = true;
 
-        console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
+        // Serializza le intenzioni: il nuovo achieve() parte solo dopo che il
+        // precedente si è risolto (azione socket in volo inclusa). Senza questo
+        // due emitMove/emitPickup si sovrappongono → penalità dal server.
+        this.#chain = this.#chain.then(async () => {
+            if (this.#current !== intention) return;   // già soppiantata da un push successivo
 
-        intention.achieve()
-            .catch(err => {
+            console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
+            try {
+                await intention.achieve();
+            } catch (err) {
                 if (!Array.isArray(err) || err[0] !== 'stopped')
                     console.warn(`[INTENTIONS] Fallita [${predicate[0]}]:`, err);
-            })
-            .finally(() => {
+            } finally {
                 if (this.#current === intention) {
                     this.#isRunning  = false;
                     this.#current    = null;
                     this.#currentKey = null;
                 }
-            });
+            }
+        });
     }
 
     stop() { this.#current?.stop(); }
