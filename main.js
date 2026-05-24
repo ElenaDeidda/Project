@@ -65,13 +65,6 @@ socket.onYou( ({id, name, x, y, score}) => {
     beliefs.me.score = score;
 });
 
-// Ad ogni sensing: aggiorna i beliefs e delibera subito
-socket.onSensing( (s) => {
-    // s contiene la posizione aggiornata di me e degli altri agenti, più i pacchi visibili
-    updateSensing(s);
-    // Delibera: genera opzioni e scegli intenzione migliore
-    agent.push( deliberate( generateOptions() ) );
-});
 /*sensing = {
     positions: [{x, y}, ...]       // tile percorribili visibili (non usato da noi)
     agents:    [IOAgent, ...]       // agenti nel raggio di osservazione
@@ -119,6 +112,12 @@ const { width, height } = await mapReady;
 
 console.log(`Connesso Agente ${beliefs.me.name} con id = ${beliefs.me.id}, @ (${beliefs.me.x},${beliefs.me.y})`);
 console.log(`Mappa: ${width}x${height} | Delivery points: ${beliefs.deliveryPoints.length}`);
+
+// Registra sensing DOPO che beliefs.me.id è garantito impostato da onYou
+socket.onSensing( (s) => {
+    updateSensing(s);
+    agent.push( deliberate( generateOptions() ) );
+});
 
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
 // Utile quando un pacco sparisce per timer (non arriva nessun sensing)
