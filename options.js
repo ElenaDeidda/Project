@@ -78,7 +78,7 @@ function buildSpawnOptions() {
     }
 
     for (const [key, tile] of beliefs.mapTiles.entries()) {
-        if (tile.type !== '1') continue;
+        if (tile.type != 1) continue;
 
         // Tile occupata da un agente avversario
         if (blocked.has(key)) continue;
