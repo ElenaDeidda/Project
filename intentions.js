@@ -25,11 +25,8 @@ export class IntentionRevision {
         this.#currentKey = key;
         this.#isRunning  = true;
 
-        // Serializza le intenzioni: il nuovo achieve() parte solo dopo che il
-        // precedente si è risolto (azione socket in volo inclusa). Senza questo
-        // due emitMove/emitPickup si sovrappongono → penalità dal server.
         this.#chain = this.#chain.then(async () => {
-            if (this.#current !== intention) return;   // già soppiantata da un push successivo
+            if (this.#current !== intention) return;
 
             console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
             try {
