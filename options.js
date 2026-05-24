@@ -4,6 +4,74 @@ import { smartDist, scoreParcel, nearestDeliveryDist }  from './basic_functions.
 
 const VISIBILITY_BONUS = 2;
 const SPAWN_TIMEOUT    = 3000;
+// ─── Raccolta multi-pacco adattiva ─────────────────────────────────────────
+const BASE_N            = 3;      // raccoglie finché valore portato ≥ N × avg_reward
+const N_MIN             = 1;      // soglia minima: consegna sempre a 1× avg_reward
+const N_REDUCE_STEP     = 0.5;    // di quanto si riduce N a ogni trigger
+const NO_PARCEL_TIMEOUT = 6000;   // ms senza pacchi a terra visibili → riduci N
+const DECAY_THRESHOLD   = 0.75;   // se valore scende a <75% del picco → riduci N
+
+let N_current      = BASE_N;
+let sessionPeak    = 0;           // valore massimo portato in questa sessione
+let lastGroundTime = null;        // ultima volta con ≥1 pacco a terra visibile
+let deliverLatch   = false;       // una volta scattata la soglia, resta in consegna
+
+function resetCollection() {
+    N_current      = BASE_N;
+    sessionPeak    = 0;
+    lastGroundTime = null;
+    deliverLatch   = false;
+}
+
+function carriedValue() {
+    return beliefs.carriedParcels.reduce((s, p) => s + (p.reward ?? 0), 0);
+}
+
+function shouldDeliver() {
+    if (!isCarrying()) { resetCollection(); return false; }
+    if (deliverLatch)  return true;
+
+    if (lastGroundTime === null) lastGroundTime = Date.now();
+
+    const avgReward = beliefs.config.GAME?.parcels?.reward_avg ?? 10;
+    const capacity  = beliefs.config.GAME?.player?.capacity    ?? Infinity;
+    const value     = carriedValue();
+
+    if (value > sessionPeak) sessionPeak = value;
+
+    const hasGround = [...beliefs.parcels.values()].some(p => !p.carriedBy);
+    if (hasGround) lastGroundTime = Date.now();
+
+    // 1. Capacità piena → consegna subito
+    if (beliefs.carriedParcels.length >= capacity) {
+        console.log(`[OPTIONS] Capacità piena → consegna`);
+        return (deliverLatch = true);
+    }
+
+    const now = Date.now();
+
+    // 2. Nessun pacco visibile da troppo → riduci N
+    if (now - lastGroundTime > NO_PARCEL_TIMEOUT && N_current > N_MIN) {
+        N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
+        lastGroundTime = now;
+        console.log(`[OPTIONS] Nessun pacco da ${NO_PARCEL_TIMEOUT}ms → N = ${N_current.toFixed(1)}`);
+    }
+
+    // 3. Valore decaduto troppo → riduci N
+    if (sessionPeak > 0 && value < sessionPeak * DECAY_THRESHOLD && N_current > N_MIN) {
+        N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
+        sessionPeak = value;
+        console.log(`[OPTIONS] Decay valore → N = ${N_current.toFixed(1)}`);
+    }
+
+    // 4. Soglia raggiunta
+    if (value >= N_current * avgReward) {
+        console.log(`[OPTIONS] Soglia: ${value.toFixed(0)} ≥ ${(N_current * avgReward).toFixed(0)} → consegna`);
+        return (deliverLatch = true);
+    }
+
+    return false;
+}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -97,7 +165,6 @@ function buildSpawnOptions() {
 
         options.push(['go_to_spawn', x, y, score]);
     }
-
     return options;
 }
 
@@ -111,9 +178,12 @@ function buildSpawnOptions() {
  *   - Altrimenti               → opzioni 'go_pick_up' + 'go_to_spawn'
  */
 export function generateOptions() {
-    if (isCarrying()) {
+    if (shouldDeliver()) {
         return buildDeliverOptions();
     }
+
+    // Non sta portando nulla, OPPURE sta portando ma non ha ancora raggiunto
+    // la soglia → continua a cercare pacchi da raccogliere
 
     const agentPositions = getAgentPositions();
     return [
