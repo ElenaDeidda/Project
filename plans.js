@@ -35,7 +35,7 @@ export class GoPickUp extends PlanBase {
         if (!picked || picked.length === 0) throw [`Pickup vuoto in (${x},${y})`];
 
         beliefs.carrying       = true;
-        beliefs.carriedParcels = picked;
+        beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
 
         // Reset timeout spawn tile: non siamo più in attesa su una spawn tile
         beliefs.currentSpawnTile = null;
