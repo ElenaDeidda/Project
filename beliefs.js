@@ -76,7 +76,6 @@ export function updateSensing(sensing) {
     console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
 
     const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
-    console.log(`[updateSensing] beliefs.me.id = ${beliefs.me.id}, mine = ${mine}, mine.lenght = ${mine.length}`);
     beliefs.carrying       = mine.length > 0;
     beliefs.carriedParcels = mine;
     console.log(`[updateSensing] carrying:`, beliefs.carrying);

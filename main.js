@@ -7,9 +7,11 @@ import 'dotenv/config';
 // const TOKEN = process.env.TOKEN;
 // if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
 // const HOST  = "https://deliveroojs.bears.disi.unitn.it/";
-// const HOST = process.env.HOST;
-// const socket = DjsConnect(HOST, TOKEN);
-const socket = DjsConnect('localhost:8080', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjdhODFmZSIsIm5hbWUiOiJsYXJhIiwicm9sZSI6InVzZXIiLCJpYXQiOjE3Nzk2MzYwNDB9.MBUK5aw0LN756lhEqOZgfRfJKdHxHBNEIcqDpa97s3s');
+    const HOST = process.env.HOST;
+    const TOKEN = process.env.TOKEN;
+
+    const socket = DjsConnect(HOST, TOKEN);
+// const socket = DjsConnect('localhost:8080', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjdhODFmZSIsIm5hbWUiOiJsYXJhIiwicm9sZSI6InVzZXIiLCJpYXQiOjE3Nzk2MzYwNDB9.MBUK5aw0LN756lhEqOZgfRfJKdHxHBNEIcqDpa97s3s');
 
 const agent = new IntentionRevision(socket);
 
@@ -57,7 +59,6 @@ beliefs.deliveryPoints viene usata da options.js per scegliere il delivery point
 */
 
 socket.onYou( ({id, name, x, y, score}) => {
-    console.log(`[MAIN] - id = ${id}, name = ${name}`)
     beliefs.me.id = id; 
     beliefs.me.name = name;
     beliefs.me.x = x;  
