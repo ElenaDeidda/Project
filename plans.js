@@ -31,6 +31,7 @@ export class GoPickUp extends PlanBase {
         if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito durante la navigazione`];
 
         const picked = await this.#socket.emitPickup();
+        console.log(`[PLANS] - GoPickUp -> picked = ${picked}`)
         if (!picked || picked.length === 0) throw [`Pickup vuoto in (${x},${y})`];
 
         beliefs.carrying       = true;

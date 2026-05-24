@@ -1,15 +1,15 @@
-import { DjsConnect }       from "@unitn-asa/deliveroo-js-sdk/client";
+import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
 import { beliefs, updateConfig, updateMap, updateSensing } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
 import 'dotenv/config';
 
-const TOKEN = process.env.TOKEN;
-if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
-//const HOST  = "https://deliveroojs.bears.disi.unitn.it/";
-const HOST = process.env.HOST;
-const socket = DjsConnect(HOST, TOKEN);
-//const socket = DjsConnect('localhost:8080', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjM0MjlmZCIsIm5hbWUiOiJwaXBwbyIsInJvbGUiOiJ1c2VyIiwiaWF0IjoxNzc3MjE5NzUyfQ.fUrhuwb-EV26SfO-jxR8sBB2o-qVC0FdNlu8te_9beA');
+// const TOKEN = process.env.TOKEN;
+// if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
+// const HOST  = "https://deliveroojs.bears.disi.unitn.it/";
+// const HOST = process.env.HOST;
+// const socket = DjsConnect(HOST, TOKEN);
+const socket = DjsConnect('localhost:8080', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjdhODFmZSIsIm5hbWUiOiJsYXJhIiwicm9sZSI6InVzZXIiLCJpYXQiOjE3Nzk2MzYwNDB9.MBUK5aw0LN756lhEqOZgfRfJKdHxHBNEIcqDpa97s3s');
 
 const agent = new IntentionRevision(socket);
 
@@ -57,8 +57,12 @@ beliefs.deliveryPoints viene usata da options.js per scegliere il delivery point
 */
 
 socket.onYou( ({id, name, x, y, score}) => {
-    beliefs.me.id = id; beliefs.me.name = name;
-    beliefs.me.x  = x;  beliefs.me.y    = y;  beliefs.me.score = score;
+    console.log(`[MAIN] - id = ${id}, name = ${name}`)
+    beliefs.me.id = id; 
+    beliefs.me.name = name;
+    beliefs.me.x = x;  
+    beliefs.me.y = y;  
+    beliefs.me.score = score;
 });
 
 // Ad ogni sensing: aggiorna i beliefs e delibera subito
@@ -113,7 +117,7 @@ const mapReady = new Promise(res => socket.once('map', (w, h, t) => res({ width:
 await meReady;
 const { width, height } = await mapReady;
 
-console.log(`Agente: ${beliefs.me.name} @ (${beliefs.me.x},${beliefs.me.y})`);
+console.log(`Connesso Agente ${beliefs.me.name} con id = ${beliefs.me.id}, @ (${beliefs.me.x},${beliefs.me.y})`);
 console.log(`Mappa: ${width}x${height} | Delivery points: ${beliefs.deliveryPoints.length}`);
 
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
