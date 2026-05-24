@@ -33,7 +33,7 @@ export function updateMap(width, height, tiles) {
     const ARROW_TYPES = new Set(['→', '←', '↑', '↓']);
     for (const tile of tiles) {
         const key = `${tile.x}_${tile.y}`;
-        beliefs.mapTiles.set(key, { type: tile.type });
+        beliefs.mapTiles.set(key, { type: String(tile.type) });
         if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
         if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
         console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
