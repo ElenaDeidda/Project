@@ -4,22 +4,79 @@ import { smartDist, scoreParcel, nearestDeliveryDist }  from './basic_functions.
 
 const VISIBILITY_BONUS = 2;
 // ─── Raccolta multi-pacco adattiva ─────────────────────────────────────────
-const BASE_N            = 3;      // raccoglie finché valore portato ≥ N × avg_reward
-const N_MIN             = 1;      // soglia minima: consegna sempre a 1× avg_reward
-const N_REDUCE_STEP     = 0.5;    // di quanto si riduce N a ogni trigger
-const NO_PARCEL_TIMEOUT = 6000;   // ms senza pacchi a terra visibili → riduci N
-const DECAY_THRESHOLD   = 0.75;   // se valore scende a <75% del picco → riduci N
+// N = quanti "pacchi di valore medio" accumulare prima di consegnare
+// (consegna quando valore_portato ≥ N × avg_reward).
+//
+// N viene inizializzato UNA SOLA VOLTA dalla config (decadimento + capacità)
+// e poi NON viene mai resettato: si adatta in corso di partita.
+const N_MIN             = 1;      // non si scende mai sotto 1× avg_reward
+const N_REDUCE_STEP     = 0.5;    // quanto cala N su un trigger forzato
+const N_INCREASE_STEP   = 0.5;    // quanto sale N dopo una consegna "pulita"
+const NO_PICKUP_TIMEOUT = 6000;   // ms senza raccogliere nuovi pacchi → consegna
+const DECAY_THRESHOLD   = 0.60;   // valore < 60% del picco del carico → consegna
 
-let N_current      = BASE_N;
-let sessionPeak    = 0;           // valore massimo portato in questa sessione
-let lastGroundTime = null;        // ultima volta con ≥1 pacco a terra visibile
-let deliverLatch   = false;       // una volta scattata la soglia, resta in consegna
+// Stato persistente (MAI resettato durante la partita)
+let N_current = null;             // null finché non inizializzato da config
+
+// Stato per-carico (resettato a ogni consegna)
+let batchPeak        = 0;         // picco di valore del carico attuale
+let lastPickupTime   = null;      // ultimo pickup riuscito
+let prevCarriedCount = 0;         // per rilevare nuovi pickup
+let deliverLatch     = false;     // una volta deciso, resta in consegna
+let deliverReason    = null;      // 'threshold' (pulita) | 'trigger' (forzata)
+
+// Tetto per N: capacità reale se finita, altrimenti un default prudente
+function capacityCap() {
+    const c = beliefs.config.GAME?.player?.capacity;
+    return Number.isFinite(c) ? c : 10;
+}
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Converte decaying_event ("1s", "500ms", "infinite", …) in ms per -1 reward
+function parseDecayMs(decaying_event) {
+    if (decaying_event == null || decaying_event === 'infinite') return Infinity;
+    const m = String(decaying_event).match(/^(\d+(?:\.\d+)?)\s*(ms|s)?$/);
+    if (!m) return Infinity;
+    const val = parseFloat(m[1]);
+    return (m[2] === 'ms') ? val : val * 1000;
+}
+
+// Valore iniziale di N derivato dalla dinamica di gioco:
+//   quanti pacchi riesco a raccogliere prima che il primo perda
+//   (1 - DECAY_THRESHOLD) del suo valore, limitato dalla capacità.
+function computeInitialN() {
+    const cfg       = beliefs.config.GAME ?? {};
+    const avgReward = cfg.parcels?.reward_avg          ?? 10;
+    const moveDur   = cfg.player?.movement_duration    ?? 500;
+    const obsDist   = cfg.player?.observation_distance ?? 5;
+    const decayMs   = parseDecayMs(cfg.parcels?.decaying_event);
+    const cap       = capacityCap();
+
+    // Nessun decadimento → conviene riempirsi fino alla capacità
+    if (!Number.isFinite(decayMs)) return clamp(cap, N_MIN, cap);
+
+    const lossFraction  = 1 - DECAY_THRESHOLD;              // 0.40
+    const timeBudget    = lossFraction * avgReward * decayMs; // ms prima della soglia di decay
+    const timePerPickup = Math.max(1, obsDist) * moveDur;     // ms stimati per un pickup
+    const collectable   = Math.floor(timeBudget / timePerPickup);
+
+    return clamp(collectable, N_MIN, cap);
+}
 
 function resetCollection() {
-    N_current      = BASE_N;
-    sessionPeak    = 0;
-    lastGroundTime = null;
-    deliverLatch   = false;
+    // Consegna "pulita" (soglia/capacità) → su questa mappa conviene accumulare
+    // un po' di più: alza N (adattamento bidirezionale).
+    if (deliverReason === 'threshold' && N_current !== null) {
+        N_current = clamp(N_current + N_INCREASE_STEP, N_MIN, capacityCap());
+        console.log(`[OPTIONS] Consegna pulita → N = ${N_current.toFixed(1)}`);
+    }
+    batchPeak        = 0;
+    lastPickupTime   = null;
+    prevCarriedCount = 0;
+    deliverLatch     = false;
+    deliverReason    = null;
+    // N_current NON viene toccato
 }
 
 function carriedValue() {
@@ -28,44 +85,55 @@ function carriedValue() {
 
 function shouldDeliver() {
     if (!isCarrying()) { resetCollection(); return false; }
-    if (deliverLatch)  return true;
 
-    if (lastGroundTime === null) lastGroundTime = Date.now();
+    // Inizializzazione una-tantum di N dalla config
+    if (N_current === null) {
+        N_current = computeInitialN();
+        console.log(`[OPTIONS] N iniziale = ${N_current.toFixed(1)}`);
+    }
 
+    if (deliverLatch) return true;
+
+    const now       = Date.now();
     const avgReward = beliefs.config.GAME?.parcels?.reward_avg ?? 10;
     const capacity  = beliefs.config.GAME?.player?.capacity    ?? Infinity;
     const value     = carriedValue();
+    const count     = beliefs.carriedParcels.length;
 
-    if (value > sessionPeak) sessionPeak = value;
+    // Picco di valore del carico corrente
+    if (value > batchPeak) batchPeak = value;
 
-    const hasGround = [...beliefs.parcels.values()].some(p => !p.carriedBy);
-    if (hasGround) lastGroundTime = Date.now();
+    // Rileva un nuovo pickup → resetta il timer "ultimo pickup"
+    if (lastPickupTime === null || count > prevCarriedCount) lastPickupTime = now;
+    prevCarriedCount = count;
 
-    // 1. Capacità piena → consegna subito
-    if (beliefs.carriedParcels.length >= capacity) {
+    // 1. Capacità piena → consegna (pulita)
+    if (count >= capacity) {
         console.log(`[OPTIONS] Capacità piena → consegna`);
+        deliverReason = 'threshold';
         return (deliverLatch = true);
     }
 
-    const now = Date.now();
-
-    // 2. Nessun pacco visibile da troppo → riduci N
-    if (now - lastGroundTime > NO_PARCEL_TIMEOUT && N_current > N_MIN) {
+    // 2. Trigger: troppo tempo senza raccogliere nuovi pacchi → consegna + abbassa N
+    if (now - lastPickupTime > NO_PICKUP_TIMEOUT) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        lastGroundTime = now;
-        console.log(`[OPTIONS] Nessun pacco da ${NO_PARCEL_TIMEOUT}ms → N = ${N_current.toFixed(1)}`);
+        console.log(`[OPTIONS] ${NO_PICKUP_TIMEOUT}ms senza pickup → consegna, N = ${N_current.toFixed(1)}`);
+        deliverReason = 'trigger';
+        return (deliverLatch = true);
     }
 
-    // 3. Valore decaduto troppo → riduci N
-    if (sessionPeak > 0 && value < sessionPeak * DECAY_THRESHOLD && N_current > N_MIN) {
+    // 3. Trigger: valore decaduto sotto soglia rispetto al picco → consegna + abbassa N
+    if (batchPeak > 0 && value < batchPeak * DECAY_THRESHOLD) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        sessionPeak = value;
-        console.log(`[OPTIONS] Decay valore → N = ${N_current.toFixed(1)}`);
+        console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna, N = ${N_current.toFixed(1)}`);
+        deliverReason = 'trigger';
+        return (deliverLatch = true);
     }
 
-    // 4. Soglia raggiunta
+    // 4. Soglia di accumulo raggiunta → consegna (pulita)
     if (value >= N_current * avgReward) {
         console.log(`[OPTIONS] Soglia: ${value.toFixed(0)} ≥ ${(N_current * avgReward).toFixed(0)} → consegna`);
+        deliverReason = 'threshold';
         return (deliverLatch = true);
     }
 
@@ -177,28 +245,73 @@ export function generateOptions() {
  *   3. go_to_spawn → spawn tile con score massimo
  *   4. fallback → ['go_to_spawn'] senza coordinate
  */
+// ─── Commitment / isteresi ──────────────────────────────────────────────────
+// Per evitare che l'agente cambi target a ogni tick quando due opzioni hanno
+// score quasi uguale, ricordiamo l'opzione attualmente perseguita e cambiamo
+// solo se un'alternativa la supera di almeno STICKY_MARGIN (in valore relativo).
+const STICKY_MARGIN = 0.20;   // 20%
+let committedKey = null;
+
+function _optionKey(o) {
+    if (o[0] === 'go_pick_up')  return `${o[0]}_${o[1]}_${o[2]}_${o[3]}`;
+    if (o[0] === 'deliver')     return `${o[0]}_${o[1]}_${o[2]}`;
+    if (o[0] === 'go_to_spawn') return o[1] != null ? `${o[0]}_${o[1]}_${o[2]}` : o[0];
+    return o[0];
+}
+
+function _commit(option) {
+    committedKey = _optionKey(option);
+    return option;
+}
+
+// Decide se mantenere il target corrente `cur` invece di passare a `best`.
+// higherIsBetter=true  → score (pickup/spawn): cambia se best supera cur del margine
+// higherIsBetter=false → distanza (deliver):  cambia se best è più vicino del margine
+function _shouldSwitch(best, cur, score, higherIsBetter) {
+    const delta = higherIsBetter ? score(best) - score(cur)
+                                 : score(cur)  - score(best);
+    return delta > STICKY_MARGIN * Math.abs(score(cur));
+}
+
 export function deliberate(options) {
     const SCORE_MIN = -100;
 
     if (isCarrying()) {
         const delivers = options.filter(o => o[0] === 'deliver');
-        if (delivers.length > 0)
-            return delivers.reduce((best, cur) => cur[3] < best[3] ? cur : best);
+        if (delivers.length > 0) {
+            const best = delivers.reduce((b, c) => c[3] < b[3] ? c : b);
+            const cur  = delivers.find(o => _optionKey(o) === committedKey);
+            if (cur && _optionKey(best) !== committedKey &&
+                !_shouldSwitch(best, cur, o => o[3], false))
+                return cur;                     // resta sulla delivery corrente
+            return _commit(best);
+        }
     }
 
     const pickups = options.filter(o => o[0] === 'go_pick_up');
     if (pickups.length > 0) {
         const best = pickups.reduce((b, c) => c[4] > b[4] ? c : b);
-        if (best[4] >= SCORE_MIN) return best;
+        if (best[4] >= SCORE_MIN) {
+            const cur = pickups.find(o => _optionKey(o) === committedKey);
+            if (cur && _optionKey(best) !== committedKey &&
+                !_shouldSwitch(best, cur, o => o[4], true))
+                return cur;                     // resta sul pacco corrente
+            return _commit(best);
+        }
     }
 
     const spawns = options.filter(o => o[0] === 'go_to_spawn');
     if (spawns.length > 0) {
         spawns.sort((a, b) => b[3] - a[3]);
+        const best = spawns[0];
         const top2 = spawns.slice(0, 2).map(o => `(${o[1]},${o[2]})=${o[3].toFixed(1)}`).join(' | ');
         console.log(`[DELIBERATE] spawn top2: ${top2}`);
-        return spawns[0];
+        const cur = spawns.find(o => _optionKey(o) === committedKey);
+        if (cur && _optionKey(best) !== committedKey &&
+            !_shouldSwitch(best, cur, o => o[3], true))
+            return cur;                         // resta sulla spawn tile corrente
+        return _commit(best);
     }
 
-    return ['go_to_spawn'];
+    return _commit(['go_to_spawn']);
 }
