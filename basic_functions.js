@@ -98,12 +98,11 @@ export const nearestDeliveryDist = (parcel, deliveryPoints) => {
  * @param {number} deliveryDist   distanza pacco→delivery più vicino (da nearestDeliveryDist)
  * @returns {number} punteggio — più alto = più desiderabile
  */
-export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0) => {
+export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0, myDist = smartDist(me, parcel)) => {
     const PROXIMITY_THRESHOLD = 3;   // distanza sotto cui il pacco è "sulla strada"
     const PROXIMITY_BONUS     = 20;  // reward virtuale aggiunto per pacco vicinissimo
     const PENALITA_NEMICO     = 1000; // penalità se un nemico è più vicino al pacco
  
-    const myDist = smartDist(me, parcel);
     if (myDist === Infinity) return -Infinity;
  
     const reward = parcel.reward ?? parcel.value ?? 0;
