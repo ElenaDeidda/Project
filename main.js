@@ -2,7 +2,8 @@ import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
 import { beliefs, updateConfig, updateMap, updateSensing } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 
 // const TOKEN = process.env.TOKEN;
 // if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
