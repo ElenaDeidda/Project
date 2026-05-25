@@ -33,10 +33,11 @@ function capacityCap() {
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-// Converte decaying_event ("1s", "500ms", "infinite", …) in ms per -1 reward
-function parseDecayMs(decaying_event) {
-    if (decaying_event == null || decaying_event === 'infinite') return Infinity;
-    const m = String(decaying_event).match(/^(\d+(?:\.\d+)?)\s*(ms|s)?$/);
+// Converte un intervallo di config ("1s", "500ms", "infinite", …) in ms.
+// Usato sia per decaying_event (ms per -1 reward) sia per generation_event.
+function parseIntervalMs(value) {
+    if (value == null || value === 'infinite') return Infinity;
+    const m = String(value).match(/^(\d+(?:\.\d+)?)\s*(ms|s)?$/);
     if (!m) return Infinity;
     const val = parseFloat(m[1]);
     return (m[2] === 'ms') ? val : val * 1000;
@@ -50,7 +51,7 @@ function computeInitialN() {
     const avgReward = cfg.parcels?.reward_avg          ?? 10;
     const moveDur   = cfg.player?.movement_duration    ?? 500;
     const obsDist   = cfg.player?.observation_distance ?? 5;
-    const decayMs   = parseDecayMs(cfg.parcels?.decaying_event);
+    const decayMs   = parseIntervalMs(cfg.parcels?.decaying_event);
     const cap       = capacityCap();
 
     // Nessun decadimento → conviene riempirsi fino alla capacità
@@ -62,6 +63,29 @@ function computeInitialN() {
     const collectable   = Math.floor(timeBudget / timePerPickup);
 
     return clamp(collectable, N_MIN, cap);
+}
+
+// ─── Pattugliamento spawn ───────────────────────────────────────────────────
+// Quando non ci sono pacchi da raccogliere l'agente sosta sulla zona spawn
+// migliore; se dopo un timeout (legato al ritmo di generazione) non vede ancora
+// pacchi attorno, marca quella zona come "esausta" e si riloca su un'altra.
+const PATROL_TIMEOUT_FACTOR   = 2;     // timeout = factor × intervallo di generazione
+const PATROL_TIMEOUT_FALLBACK = 4000;  // ms, se generation_event non è leggibile
+const EXHAUST_COOLDOWN_FACTOR = 3;     // per quanto una zona resta esclusa (× timeout)
+const ENEMY_ZONE_PENALTY      = 5;     // penalità di score per nemico vicino alla tile
+
+let lastPickupSeenTime = Date.now();   // ultima volta con ≥1 pacco raccoglibile visibile
+const exhaustedZones   = new Map();    // "x_y" centro zona esausta → scadenza (ms)
+
+function genIntervalMs() {
+    const p = beliefs.config.GAME?.parcels ?? {};
+    const ms = parseIntervalMs(p.generation_event ?? p.generation_time);
+    return Number.isFinite(ms) ? ms : null;
+}
+
+function patrolTimeout() {
+    const g = genIntervalMs();
+    return g != null ? g * PATROL_TIMEOUT_FACTOR : PATROL_TIMEOUT_FALLBACK;
 }
 
 function resetCollection() {
@@ -185,31 +209,64 @@ function buildDeliverOptions() {
     ]);
 }
 
-function buildSpawnOptions() {
+function buildSpawnOptions(agentPositions) {
+    const now     = Date.now();
     const blocked = getBlockedCells();
-    const options = [];
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
 
+    // Purga le zone esauste scadute (lì i pacchi potrebbero essere rinati)
+    for (const [k, exp] of exhaustedZones) if (exp <= now) exhaustedZones.delete(k);
 
-    for (const [key, tile] of beliefs.mapTiles.entries()) {
-        if (tile.type !== '1') continue;
-
-        // Tile occupata da un agente avversario
-        if (blocked.has(key)) continue;
-
-        const [x, y] = key.split('_').map(Number);
-
-        // Esclude la tile andata in timeout
-
-        const myDist     = smartDist(beliefs.me, { x, y });
-        const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
-        const visibility = beliefs.spawnVisibility.get(key) ?? 0;
-
-        // Score: premia tile vicine, vicine a un delivery e con alta visibilità spawn
-        const score = -(myDist + delDist) + visibility * VISIBILITY_BONUS;
-
-        options.push(['go_to_spawn', x, y, score]);
+    // Trigger di rilocazione: troppo tempo senza pacchi attorno → la zona attuale
+    // è esausta, escludila per un cooldown e riavvia la finestra di sosta.
+    if (now - lastPickupSeenTime > patrolTimeout()) {
+        const cx = Math.round(beliefs.me.x), cy = Math.round(beliefs.me.y);
+        exhaustedZones.set(`${cx}_${cy}`, now + patrolTimeout() * EXHAUST_COOLDOWN_FACTOR);
+        lastPickupSeenTime = now;
+        console.log(`[OPTIONS] Zona (${cx},${cy}) esausta → rilocazione`);
     }
-    return options;
+
+    const exhaustCenters = [...exhaustedZones.keys()].map(k => {
+        const [x, y] = k.split('_').map(Number); return { x, y };
+    });
+
+    const build = (applyExhaust) => {
+        const options = [];
+        for (const [key, tile] of beliefs.mapTiles.entries()) {
+            if (tile.type !== '1') continue;
+            if (blocked.has(key)) continue;          // tile occupata da un agente
+
+            const [x, y] = key.split('_').map(Number);
+
+            // Esclude le tile dentro una zona esausta (raggio = observation_distance)
+            if (applyExhaust &&
+                exhaustCenters.some(c => Math.abs(c.x - x) + Math.abs(c.y - y) <= obsDist))
+                continue;
+
+            const myDist     = smartDist(beliefs.me, { x, y });
+            const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
+            const visibility = beliefs.spawnVisibility.get(key) ?? 0;
+
+            // Penalità: quanti nemici sono vicini a questa tile
+            let enemies = 0;
+            for (const a of agentPositions)
+                if (Math.abs(a.x - x) + Math.abs(a.y - y) <= obsDist) enemies++;
+
+            // Premia tile vicine, vicine a un delivery e con alta visibilità spawn;
+            // penalizza le zone affollate di nemici.
+            const score = -(myDist + delDist)
+                        + visibility * VISIBILITY_BONUS
+                        - enemies * ENEMY_ZONE_PENALTY;
+
+            options.push(['go_to_spawn', x, y, score]);
+        }
+        return options;
+    };
+
+    // Se l'esclusione delle zone esauste non lascia nulla, meglio muoversi
+    // comunque che restare bloccati → riprova senza esclusione.
+    const options = build(true);
+    return options.length > 0 ? options : build(false);
 }
 
 // ─── API pubblica ──────────────────────────────────────────────────────────────
@@ -223,6 +280,9 @@ function buildSpawnOptions() {
  */
 export function generateOptions() {
     if (shouldDeliver()) {
+        // In viaggio verso il delivery non siamo "in attesa di spawn":
+        // tieni fresca la finestra di pattugliamento.
+        lastPickupSeenTime = Date.now();
         return buildDeliverOptions();
     }
 
@@ -230,9 +290,14 @@ export function generateOptions() {
     // la soglia → continua a cercare pacchi da raccogliere
 
     const agentPositions = getAgentPositions();
+    const pickups        = buildPickupOptions(agentPositions);
+
+    // C'è almeno un pacco raccoglibile visibile → la zona non è "vuota"
+    if (pickups.length > 0) lastPickupSeenTime = Date.now();
+
     return [
-        ...buildPickupOptions(agentPositions),
-        ...buildSpawnOptions(),
+        ...pickups,
+        ...buildSpawnOptions(agentPositions),
     ];
 }
 
