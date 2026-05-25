@@ -14,6 +14,7 @@ const N_REDUCE_STEP     = 0.5;    // quanto cala N su un trigger forzato
 const N_INCREASE_STEP   = 0.5;    // quanto sale N dopo una consegna "pulita"
 const NO_PICKUP_TIMEOUT = 6000;   // ms senza raccogliere nuovi pacchi → consegna
 const DECAY_THRESHOLD   = 0.60;   // valore < 60% del picco del carico → consegna
+const NEAR_DELIVERY_FACTOR = 0.5; // se un delivery è a portata visiva, soglia effettiva = N × questo
 
 // Stato persistente (MAI resettato durante la partita)
 let N_current = null;             // null finché non inizializzato da config
@@ -154,10 +155,21 @@ function shouldDeliver() {
         return (deliverLatch = true);
     }
 
-    // 4. Soglia di accumulo raggiunta → consegna (pulita)
-    if (value >= N_current * avgReward) {
-        console.log(`[OPTIONS] Soglia: ${value.toFixed(0)} ≥ ${(N_current * avgReward).toFixed(0)} → consegna`);
-        deliverReason = 'threshold';
+    // 4. Soglia di accumulo. Se un delivery è nel raggio visivo, consegnare
+    //    costa poco: abbassa la soglia EFFETTIVA (senza toccare N_current, così
+    //    l'apprendimento di N resta pulito) e consegna più spesso.
+    const obsDist      = beliefs.config.GAME?.player?.observation_distance ?? 5;
+    const delDist      = nearestDeliveryDist(beliefs.me, beliefs.deliveryPoints);
+    const nearDelivery = beliefs.deliveryPoints.length > 0 && delDist <= obsDist;
+    const effN         = nearDelivery ? Math.max(N_MIN, N_current * NEAR_DELIVERY_FACTOR)
+                                      : N_current;
+
+    if (value >= effN * avgReward) {
+        // 'opportunistic' = consegna anticipata perché il delivery è a portata:
+        // NON deve influenzare l'adattamento di N (né su né giù).
+        deliverReason = (nearDelivery && effN < N_current) ? 'opportunistic' : 'threshold';
+        console.log(`[OPTIONS] Soglia${nearDelivery ? ` (delivery a dist ${delDist} ≤ ${obsDist})` : ''}: ` +
+                    `${value.toFixed(0)} ≥ ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) → consegna`);
         return (deliverLatch = true);
     }
 
@@ -209,6 +221,26 @@ function buildDeliverOptions() {
     ]);
 }
 
+// Scompone lo score di una spawn tile nei suoi termini, così formula e log
+// usano un'unica fonte di verità.
+function spawnScoreBreakdown(x, y, agentPositions, obsDist) {
+    const myDist     = smartDist(beliefs.me, { x, y });
+    const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
+    const visibility = beliefs.spawnVisibility.get(`${x}_${y}`) ?? 0;
+
+    let enemies = 0;
+    for (const a of agentPositions)
+        if (Math.abs(a.x - x) + Math.abs(a.y - y) <= obsDist) enemies++;
+
+    const prox  = -(myDist + delDist);          // vicinanza a me e a un delivery
+    const vis   = visibility * VISIBILITY_BONUS; // visibilità spawn
+    const enemy = -enemies * ENEMY_ZONE_PENALTY; // penalità nemici (≤ 0)
+
+    return { score: prox + vis + enemy, prox, vis, enemy, enemies };
+}
+
+let _lastPatrolLog = 0;   // throttle dei log di stato del pattugliamento
+
 function buildSpawnOptions(agentPositions) {
     const now     = Date.now();
     const blocked = getBlockedCells();
@@ -221,9 +253,11 @@ function buildSpawnOptions(agentPositions) {
     // è esausta, escludila per un cooldown e riavvia la finestra di sosta.
     if (now - lastPickupSeenTime > patrolTimeout()) {
         const cx = Math.round(beliefs.me.x), cy = Math.round(beliefs.me.y);
+        const waited = ((now - lastPickupSeenTime) / 1000).toFixed(1);
         exhaustedZones.set(`${cx}_${cy}`, now + patrolTimeout() * EXHAUST_COOLDOWN_FACTOR);
         lastPickupSeenTime = now;
-        console.log(`[OPTIONS] Zona (${cx},${cy}) esausta → rilocazione`);
+        console.log(`[PATROL] Zona (${cx},${cy}) esausta dopo ${waited}s senza pacchi ` +
+                    `(timeout ${(patrolTimeout() / 1000).toFixed(1)}s) → rilocazione | zone esauste: ${exhaustedZones.size}`);
     }
 
     const exhaustCenters = [...exhaustedZones.keys()].map(k => {
@@ -243,21 +277,7 @@ function buildSpawnOptions(agentPositions) {
                 exhaustCenters.some(c => Math.abs(c.x - x) + Math.abs(c.y - y) <= obsDist))
                 continue;
 
-            const myDist     = smartDist(beliefs.me, { x, y });
-            const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
-            const visibility = beliefs.spawnVisibility.get(key) ?? 0;
-
-            // Penalità: quanti nemici sono vicini a questa tile
-            let enemies = 0;
-            for (const a of agentPositions)
-                if (Math.abs(a.x - x) + Math.abs(a.y - y) <= obsDist) enemies++;
-
-            // Premia tile vicine, vicine a un delivery e con alta visibilità spawn;
-            // penalizza le zone affollate di nemici.
-            const score = -(myDist + delDist)
-                        + visibility * VISIBILITY_BONUS
-                        - enemies * ENEMY_ZONE_PENALTY;
-
+            const { score } = spawnScoreBreakdown(x, y, agentPositions, obsDist);
             options.push(['go_to_spawn', x, y, score]);
         }
         return options;
@@ -265,8 +285,21 @@ function buildSpawnOptions(agentPositions) {
 
     // Se l'esclusione delle zone esauste non lascia nulla, meglio muoversi
     // comunque che restare bloccati → riprova senza esclusione.
-    const options = build(true);
-    return options.length > 0 ? options : build(false);
+    let options = build(true);
+    if (options.length === 0) options = build(false);
+
+    // Log di stato (throttled ~1s) per tarare PATROL_TIMEOUT_FACTOR e ENEMY_ZONE_PENALTY
+    if (now - _lastPatrolLog > 1000 && options.length > 0) {
+        _lastPatrolLog = now;
+        const best = options.reduce((b, c) => c[3] > b[3] ? c : b);
+        const bd   = spawnScoreBreakdown(best[1], best[2], agentPositions, obsDist);
+        const waited = ((now - lastPickupSeenTime) / 1000).toFixed(1);
+        console.log(`[PATROL] attesa ${waited}s / timeout ${(patrolTimeout() / 1000).toFixed(1)}s | ` +
+                    `esauste: ${exhaustedZones.size} | best (${best[1]},${best[2]}) score=${bd.score.toFixed(1)} ` +
+                    `[prox=${bd.prox} vis=${bd.vis} nemici=${bd.enemies}(${bd.enemy})]`);
+    }
+
+    return options;
 }
 
 // ─── API pubblica ──────────────────────────────────────────────────────────────
