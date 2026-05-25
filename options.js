@@ -204,10 +204,16 @@ export function generateOptions() {
  *   3. go_to_spawn → spawn tile con score massimo
  *   4. fallback → ['go_to_spawn'] senza coordinate
  */
+// Inerzia sulla spawn tile corrente: evita oscillazioni tra tile con score simile.
+// Viene azzerata ogni volta che si passa a pickup o deliver.
+let _currentSpawnKey = null;
+const SPAWN_SWITCH_MARGIN = 2;  // cambia tile solo se quella nuova è almeno 2 punti migliore
+
 export function deliberate(options) {
     const SCORE_MIN = -100;
 
     if (isCarrying()) {
+        _currentSpawnKey = null;
         const delivers = options.filter(o => o[0] === 'deliver');
         if (delivers.length > 0)
             return delivers.reduce((best, cur) => cur[3] < best[3] ? cur : best);
@@ -216,15 +222,27 @@ export function deliberate(options) {
     const pickups = options.filter(o => o[0] === 'go_pick_up');
     if (pickups.length > 0) {
         const best = pickups.reduce((b, c) => c[4] > b[4] ? c : b);
-        if (best[4] >= SCORE_MIN) return best;
+        if (best[4] >= SCORE_MIN) { _currentSpawnKey = null; return best; }
     }
 
     const spawns = options.filter(o => o[0] === 'go_to_spawn');
     if (spawns.length > 0) {
         spawns.sort((a, b) => b[3] - a[3]);
+        const best = spawns[0];
+
+        // Se c'è una tile corrente ancora valida e quella nuova non è abbastanza meglio, rimani
+        if (_currentSpawnKey !== null) {
+            const current = spawns.find(o => `${o[1]}_${o[2]}` === _currentSpawnKey);
+            if (current && best[3] - current[3] < SPAWN_SWITCH_MARGIN) {
+                console.log(`[DELIBERATE] spawn inerzia → (${current[1]},${current[2]})=${current[3].toFixed(1)} (best: (${best[1]},${best[2]})=${best[3].toFixed(1)})`);
+                return current;
+            }
+        }
+
+        _currentSpawnKey = `${best[1]}_${best[2]}`;
         const top2 = spawns.slice(0, 2).map(o => `(${o[1]},${o[2]})=${o[3].toFixed(1)}`).join(' | ');
-        console.log(`[DELIBERATE] spawn top2: ${top2}`);
-        return spawns[0];
+        console.log(`[DELIBERATE] spawn NUOVO: ${top2}`);
+        return best;
     }
 
     return ['go_to_spawn'];
