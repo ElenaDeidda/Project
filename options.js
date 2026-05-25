@@ -3,7 +3,6 @@ import { beliefs, getAgentPositions, getBlockedCells } from './beliefs.js';
 import { smartDist, scoreParcel, nearestDeliveryDist }  from './basic_functions.js';
 
 const VISIBILITY_BONUS = 2;
-const SPAWN_TIMEOUT    = 3000;
 // ─── Raccolta multi-pacco adattiva ─────────────────────────────────────────
 const BASE_N            = 3;      // raccoglie finché valore portato ≥ N × avg_reward
 const N_MIN             = 1;      // soglia minima: consegna sempre a 1× avg_reward
@@ -79,24 +78,6 @@ function isCarrying() {
     return beliefs.carrying || beliefs.carriedParcels.length > 0;
 }
 
-/**
- * Restituisce true se l'agente è fermo sulla spawn tile corrente
- * da più di SPAWN_TIMEOUT ms senza che sia spawnato nulla.
- */
-function isSpawnTiledOut() {
-    return beliefs.currentSpawnTile !== null
-        && beliefs.spawnArrivalTime  !== null
-        && Date.now() - beliefs.spawnArrivalTime > SPAWN_TIMEOUT;
-}
-
-/**
- * Restituisce true se la tile (x,y) è la spawn tile andata in timeout.
- */
-function isTimedOutTile(x, y) {
-    return isSpawnTiledOut()
-        && beliefs.currentSpawnTile.x === x
-        && beliefs.currentSpawnTile.y === y;
-}
 
 // ─── sezioni di generateOptions ───────────────────────────────────────────────
 
@@ -140,10 +121,6 @@ function buildSpawnOptions() {
     const blocked = getBlockedCells();
     const options = [];
 
-    if (isSpawnTiledOut()) {
-        console.log(`[OPTIONS] Timeout spawn tile ` +
-            `(${beliefs.currentSpawnTile.x},${beliefs.currentSpawnTile.y}) — cerco nuova`);
-    }
 
     for (const [key, tile] of beliefs.mapTiles.entries()) {
         if (tile.type !== '1') continue;
@@ -154,7 +131,6 @@ function buildSpawnOptions() {
         const [x, y] = key.split('_').map(Number);
 
         // Esclude la tile andata in timeout
-        if (isTimedOutTile(x, y)) continue;
 
         const myDist     = smartDist(beliefs.me, { x, y });
         const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
@@ -217,8 +193,12 @@ export function deliberate(options) {
     }
 
     const spawns = options.filter(o => o[0] === 'go_to_spawn');
-    if (spawns.length > 0)
-        return spawns.reduce((b, c) => c[3] > b[3] ? c : b);
+    if (spawns.length > 0) {
+        spawns.sort((a, b) => b[3] - a[3]);
+        const top2 = spawns.slice(0, 2).map(o => `(${o[1]},${o[2]})=${o[3].toFixed(1)}`).join(' | ');
+        console.log(`[DELIBERATE] spawn top2: ${top2}`);
+        return spawns[0];
+    }
 
     return ['go_to_spawn'];
 }

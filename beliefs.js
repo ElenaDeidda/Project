@@ -16,12 +16,6 @@ export const beliefs = {
     // per ogni spawn tile "x_y" → quante spawn tiles sono visibili da quel punto
     spawnVisibility: new Map(),
 
-    // Timeout spawn tile:
-    // traccia la tile di spawn corrente e quando ci siamo arrivati.
-    // Se dopo SPAWN_TIMEOUT ms non spawna nessun pacco, options.js
-    // esclude questa tile e l'agente si sposta su una nuova.
-    currentSpawnTile: null,   // { x, y } della spawn tile corrente
-    spawnArrivalTime: null,   // Date.now() quando ci siamo arrivati
 };
 
 export function updateConfig(config) {
