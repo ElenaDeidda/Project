@@ -3,7 +3,6 @@ import { beliefs, getAgentPositions, getBlockedCells } from './beliefs.js';
 import { smartDist, scoreParcel, nearestDeliveryDist }  from './basic_functions.js';
 
 const VISIBILITY_BONUS = 2;
-const SPAWN_TIMEOUT    = 3000;
 
 // ─── Adaptive multi-parcel collection ─────────────────────────────────────────
 const BASE_N            = 3;      // raccoglie finché valore portato ≥ N × avg_reward
@@ -82,25 +81,6 @@ function shouldDeliver() {
     return false;
 }
 
-/**
- * Restituisce true se l'agente è fermo sulla spawn tile corrente
- * da più di SPAWN_TIMEOUT ms senza che sia spawnato nulla.
- */
-function isSpawnTiledOut() {
-    return beliefs.currentSpawnTile !== null
-        && beliefs.spawnArrivalTime  !== null
-        && Date.now() - beliefs.spawnArrivalTime > SPAWN_TIMEOUT;
-}
-
-/**
- * Restituisce true se la tile (x,y) è la spawn tile andata in timeout.
- */
-function isTimedOutTile(x, y) {
-    return isSpawnTiledOut()
-        && beliefs.currentSpawnTile.x === x
-        && beliefs.currentSpawnTile.y === y;
-}
-
 // ─── sezioni di generateOptions ───────────────────────────────────────────────
 
 function buildPickupOptions(agentPositions) {
@@ -143,11 +123,6 @@ function buildSpawnOptions() {
     const blocked = getBlockedCells();
     const options = [];
 
-    if (isSpawnTiledOut()) {
-        console.log(`[OPTIONS] Timeout spawn tile ` +
-            `(${beliefs.currentSpawnTile.x},${beliefs.currentSpawnTile.y}) — cerco nuova`);
-    }
-
     for (const [key, tile] of beliefs.mapTiles.entries()) {
         if (tile.type !== '1') continue;
 
@@ -155,9 +130,6 @@ function buildSpawnOptions() {
         if (blocked.has(key)) continue;
 
         const [x, y] = key.split('_').map(Number);
-
-        // Esclude la tile andata in timeout
-        if (isTimedOutTile(x, y)) continue;
 
         const myDist     = smartDist(beliefs.me, { x, y });
         const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
