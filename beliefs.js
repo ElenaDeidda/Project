@@ -73,12 +73,12 @@ export function updateSensing(sensing) {
         }
     }
     console.log(`[updateSensing] parcels visibili:`, beliefs.parcels.size);
-    console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
+    // console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
 
     const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
     beliefs.carrying       = mine.length > 0;
     beliefs.carriedParcels = mine;
-    console.log(`[updateSensing] carrying:`, beliefs.carrying);
+    // console.log(`[updateSensing] carrying:`, beliefs.carrying);
     console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
 
     updateAgents(sensing.agents ?? []);
