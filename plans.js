@@ -37,10 +37,6 @@ export class GoPickUp extends PlanBase {
         beliefs.carrying       = true;
         beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
 
-        // Reset timeout spawn tile: non siamo più in attesa su una spawn tile
-        beliefs.currentSpawnTile = null;
-        beliefs.spawnArrivalTime = null;
-
         console.log(`[PLANS] Raccolti ${picked.length} pacchi`);
         return true;
     }
@@ -92,21 +88,11 @@ export class GoToSpawn extends PlanBase {
             beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop
         );
 
-        if (nav === 'stopped') throw ['stopped'];
-        if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
-
-        // Aggiorna il timer SOLO se la tile è diversa da quella corrente.
-        // Se il piano viene rieseguito sulla stessa tile (loop 200ms),
-        // il timestamp rimane invariato e il timeout può scadere correttamente.
-        if (!beliefs.currentSpawnTile ||
-            beliefs.currentSpawnTile.x !== x ||
-            beliefs.currentSpawnTile.y !== y) {
-            beliefs.currentSpawnTile = { x, y };
-            beliefs.spawnArrivalTime = Date.now();
-            console.log(`[PLANS] GoToSpawn: nuova tile (${x},${y}), timeout tra 3s`);
-        } else {
-            console.log(`[PLANS] GoToSpawn: già su (${x},${y}), timer invariato`);
+        if (nav === 'stopped') {
+            console.log(`[PLANS] GoToSpawn INTERROTTO verso (${x},${y}) — ora \@ (${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`);
+            throw ['stopped'];
         }
+        if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
 
         await new Promise(r => setTimeout(r, 300));
         return true;
