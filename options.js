@@ -220,8 +220,12 @@ export function deliberate(options) {
     }
 
     const spawns = options.filter(o => o[0] === 'go_to_spawn');
-    if (spawns.length > 0)
-        return spawns.reduce((b, c) => c[3] > b[3] ? c : b);
+    if (spawns.length > 0) {
+        spawns.sort((a, b) => b[3] - a[3]);
+        const top2 = spawns.slice(0, 2).map(o => `(${o[1]},${o[2]})=${o[3].toFixed(1)}`).join(' | ');
+        console.log(`[DELIBERATE] spawn top2: ${top2}`);
+        return spawns[0];
+    }
 
     return ['go_to_spawn'];
 }

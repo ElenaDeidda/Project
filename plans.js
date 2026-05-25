@@ -91,7 +91,10 @@ export class GoToSpawn extends PlanBase {
             beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop
         );
 
-        if (nav === 'stopped') throw ['stopped'];
+        if (nav === 'stopped') {
+            console.log(`[PLANS] GoToSpawn INTERROTTO verso (${x},${y}) — ora @ (${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`);
+            throw ['stopped'];
+        }
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
 
         // Aggiorna il timer SOLO se la tile è diversa da quella corrente.
