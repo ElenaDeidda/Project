@@ -98,28 +98,34 @@ export const nearestDeliveryDist = (parcel, deliveryPoints) => {
  * @param {number} deliveryDist   distanza pacco→delivery più vicino (da nearestDeliveryDist)
  * @returns {number} punteggio — più alto = più desiderabile
  */
-export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0, myDist = smartDist(me, parcel)) => {
+export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0, myDist = smartDist(me, parcel), decayPerStep = 0) => {
     const PROXIMITY_THRESHOLD = 3;   // distanza sotto cui il pacco è "sulla strada"
     const PROXIMITY_BONUS     = 20;  // reward virtuale aggiunto per pacco vicinissimo
     const PENALITA_NEMICO     = 1000; // penalità se un nemico è più vicino al pacco
 
     if (myDist === Infinity) return -Infinity;
- 
+
     const reward = parcel.reward ?? parcel.value ?? 0;
     if (reward <= 0) return -Infinity;
- 
+
     // Distanza totale del ciclo: me → pacco → delivery
     const totalDist = myDist + deliveryDist;
     if (totalDist === 0) return reward; // siamo già sopra il pacco e sul delivery
- 
-    // Score base: efficienza (punti per passo)
-    let score = reward / totalDist;
- 
+
+    // Reward effettivo: scontato per il decay atteso sull'intero ciclo
+    // (stesso modello usato da computeInitialN per N). decayPerStep = reward persi
+    // per passo; con decay 'infinite' è 0 → nessuno sconto.
+    const bankedReward = reward - totalDist * decayPerStep;
+    if (bankedReward <= 0) return -Infinity; // arriverebbe a valore ~0 → non conviene
+
+    // Score base: efficienza (punti effettivi per passo)
+    let score = bankedReward / totalDist;
+
     // Bonus prossimità: il pacco è quasi sulla nostra strada
     if (myDist <= PROXIMITY_THRESHOLD) {
         score += PROXIMITY_BONUS / totalDist;
     }
- 
+
     // Penalità nemico: un agente è più vicino al pacco di noi → difficile arrivarci primi
     for (const agent of knownAgents) {
         if (smartDist(agent, parcel) < myDist) {
@@ -127,6 +133,6 @@ export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0, myDi
             break;
         }
     }
-    console.log(`[scoreParcel] parcel ${parcel.id} at (${parcel.x},${parcel.y}) with reward ${reward}: score = ${score.toFixed(2)} (myDist=${myDist}, deliveryDist=${deliveryDist})`);
+    console.log(`[scoreParcel] parcel ${parcel.id} (${parcel.x},${parcel.y}) reward=${reward} banked=${bankedReward.toFixed(1)}: score=${score.toFixed(2)} (myDist=${myDist}, delDist=${deliveryDist})`);
     return score;
 };

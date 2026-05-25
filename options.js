@@ -50,6 +50,19 @@ function parseIntervalMs(value) {
     return (m[2] === 'ms') ? val : val * 1000;
 }
 
+// Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
+// così i due ragionano sullo stesso "valore nel tempo".
+function decayMsFromConfig() {
+    return parseIntervalMs(beliefs.config.GAME?.parcels?.decaying_event);
+}
+
+// Reward persi per passo di movimento (0 se il decay è 'infinite')
+function decayPerStep() {
+    const decayMs = decayMsFromConfig();
+    const moveDur = beliefs.config.GAME?.player?.movement_duration ?? 500;
+    return Number.isFinite(decayMs) ? moveDur / decayMs : 0;
+}
+
 // Valore iniziale di N derivato dalla dinamica di gioco:
 //   quanti pacchi riesco a raccogliere prima che il primo perda
 //   (1 - DECAY_THRESHOLD) del suo valore, limitato dalla capacità.
@@ -58,7 +71,7 @@ function computeInitialN() {
     const avgReward = cfg.parcels?.reward_avg          ?? 10;
     const moveDur   = cfg.player?.movement_duration    ?? 500;
     const obsDist   = cfg.player?.observation_distance ?? 5;
-    const decayMs   = parseIntervalMs(cfg.parcels?.decaying_event);
+    const decayMs   = decayMsFromConfig();
     const cap       = capacityCap();
 
     // Nessun decadimento → conviene riempirsi fino alla capacità
@@ -194,6 +207,7 @@ function isCarrying() {
 function buildPickupOptions(agentPositions, dist) {
     const options = [];
     const blocked = getBlockedCells();
+    const dps     = decayPerStep();   // reward persi per passo (modello condiviso con N)
 
     for (const [id, parcel] of beliefs.parcels.entries()) {
         // Già portato da qualcuno
@@ -208,7 +222,7 @@ function buildPickupOptions(agentPositions, dist) {
         if (!Number.isFinite(rd)) continue;
 
         const delDist = nearestDeliveryDist(parcel, beliefs.deliveryPoints);
-        const score   = scoreParcel(beliefs.me, parcel, agentPositions, delDist, rd);
+        const score   = scoreParcel(beliefs.me, parcel, agentPositions, delDist, rd, dps);
 
         // Scarta subito pacchi con score negativo infinito (reward 0, ecc.)
         if (score === -Infinity) continue;
