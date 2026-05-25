@@ -101,6 +101,58 @@ function aStarPath(start, goal, walkableTiles, blocked, isDirectional = false) {
     return null;
 }
 
+// BFS single-source: distanza reale di percorso dalla posizione `start` verso
+// TUTTE le celle raggiungibili, rispettando muri, vincoli direzionali e celle
+// bloccate dagli agenti. Una sola passata O(celle).
+// Ritorna una Map "x_y" → distanza; le celle assenti sono irraggiungibili (∞).
+export function reachableDistances(start, walkableTiles, blocked, isDirectional = false) {
+    const key  = (x, y) => `${Math.round(x)}_${Math.round(y)}`;
+    const dist = new Map();
+
+    const sx = Math.round(start.x), sy = Math.round(start.y);
+    const startKey = key(sx, sy);
+    dist.set(startKey, 0);
+
+    const queue = [{ x: sx, y: sy, key: startKey }];
+    let head = 0;
+
+    while (head < queue.length) {
+        const current     = queue[head++];
+        const currentTile = walkableTiles.get(current.key);
+        const d           = dist.get(current.key);
+
+        const neighbors = [
+            { x: current.x + 1, y: current.y },
+            { x: current.x - 1, y: current.y },
+            { x: current.x,     y: current.y + 1 },
+            { x: current.x,     y: current.y - 1 },
+        ];
+
+        for (const nb of neighbors) {
+            const nKey = key(nb.x, nb.y);
+            if (dist.has(nKey)) continue;
+
+            const tile = walkableTiles.get(nKey);
+            if (!tile) continue;
+            if (tile.type === 0 || tile.type === '0') continue;
+
+            // Vincolo direzionale: se la tile corrente è una freccia, blocca
+            // i movimenti vietati (stessa logica dell'A*)
+            if (isDirectional && ARROW_TYPES.has(currentTile?.type)) {
+                if (ARROW_BLOCKED[currentTile.type](current, nb)) continue;
+            }
+
+            // Non si attraversa né si entra in una cella occupata da un agente
+            if (blocked?.has(nKey)) continue;
+
+            dist.set(nKey, d + 1);
+            queue.push({ x: nb.x, y: nb.y, key: nKey });
+        }
+    }
+
+    return dist;
+}
+
 export async function navigateTo(
     me,
     target,
