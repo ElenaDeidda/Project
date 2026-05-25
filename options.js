@@ -1,6 +1,12 @@
 // options.js — Generazione opzioni e deliberazione
 import { beliefs, getAgentPositions, getBlockedCells } from './beliefs.js';
-import { smartDist, scoreParcel, nearestDeliveryDist }  from './basic_functions.js';
+import { scoreParcel, nearestDeliveryDist }  from './basic_functions.js';
+import { reachableDistances }                            from './moves.js';
+
+// Distanza reale di percorso (da BFS) verso (x,y); ∞ se irraggiungibile
+function realDist(dist, x, y) {
+    return dist.get(`${Math.round(x)}_${Math.round(y)}`) ?? Infinity;
+}
 
 const VISIBILITY_BONUS = 2;
 // ─── Raccolta multi-pacco adattiva ─────────────────────────────────────────
@@ -169,7 +175,7 @@ function shouldDeliver() {
         // NON deve influenzare l'adattamento di N (né su né giù).
         deliverReason = (nearDelivery && effN < N_current) ? 'opportunistic' : 'threshold';
         console.log(`[OPTIONS] Soglia${nearDelivery ? ` (delivery a dist ${delDist} ≤ ${obsDist})` : ''}: ` +
-                    `${value.toFixed(0)} ≥ ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) -> consegna`);
+                    `${value.toFixed(0)} ≥ ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) → consegna`);
         return (deliverLatch = true);
     }
 
@@ -185,7 +191,7 @@ function isCarrying() {
 
 // ─── sezioni di generateOptions ───────────────────────────────────────────────
 
-function buildPickupOptions(agentPositions) {
+function buildPickupOptions(agentPositions, dist) {
     const options = [];
     const blocked = getBlockedCells();
 
@@ -197,10 +203,14 @@ function buildPickupOptions(agentPositions) {
         const key = `${Math.round(parcel.x)}_${Math.round(parcel.y)}`;
         if (blocked.has(key)) continue;
 
-        const delDist = nearestDeliveryDist(parcel, beliefs.deliveryPoints);
-        const score   = scoreParcel(beliefs.me, parcel, agentPositions, delDist);
+        // Distanza REALE di percorso: se irraggiungibile (muri/nemici) → scarta
+        const rd = realDist(dist, parcel.x, parcel.y);
+        if (!Number.isFinite(rd)) continue;
 
-        // Scarta subito pacchi con score negativo infinito (irraggiungibili o reward 0)
+        const delDist = nearestDeliveryDist(parcel, beliefs.deliveryPoints);
+        const score   = scoreParcel(beliefs.me, parcel, agentPositions, delDist, rd);
+
+        // Scarta subito pacchi con score negativo infinito (reward 0, ecc.)
         if (score === -Infinity) continue;
 
         options.push(['go_pick_up', parcel.x, parcel.y, id, score]);
@@ -209,22 +219,26 @@ function buildPickupOptions(agentPositions) {
     return options;
 }
 
-function buildDeliverOptions() {
+function buildDeliverOptions(dist) {
     // Nessun pacco da consegnare → nessuna opzione
     if (beliefs.deliveryPoints.length === 0) return [];
 
-    return beliefs.deliveryPoints.map(dp => [
-        'deliver',
-        dp.x,
-        dp.y,
-        smartDist(beliefs.me, dp),
-    ]);
+    const options = [];
+    for (const dp of beliefs.deliveryPoints) {
+        // Distanza REALE: i delivery bloccati dai nemici / dietro un muro
+        // hanno distanza ∞ → vengono scartati, così si sceglie un altro
+        // delivery raggiungibile invece di andare in loop su uno irraggiungibile.
+        const d = realDist(dist, dp.x, dp.y);
+        if (!Number.isFinite(d)) continue;
+        options.push(['deliver', dp.x, dp.y, d]);
+    }
+    return options;
 }
 
 // Scompone lo score di una spawn tile nei suoi termini, così formula e log
 // usano un'unica fonte di verità.
-function spawnScoreBreakdown(x, y, agentPositions, obsDist) {
-    const myDist     = smartDist(beliefs.me, { x, y });
+function spawnScoreBreakdown(x, y, agentPositions, obsDist, dist) {
+    const myDist     = realDist(dist, x, y);   // distanza reale di percorso
     const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
     const visibility = beliefs.spawnVisibility.get(`${x}_${y}`) ?? 0;
 
@@ -241,7 +255,7 @@ function spawnScoreBreakdown(x, y, agentPositions, obsDist) {
 
 let _lastPatrolLog = 0;   // throttle dei log di stato del pattugliamento
 
-function buildSpawnOptions(agentPositions) {
+function buildSpawnOptions(agentPositions, dist) {
     const now     = Date.now();
     const blocked = getBlockedCells();
     const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
@@ -277,7 +291,9 @@ function buildSpawnOptions(agentPositions) {
                 exhaustCenters.some(c => Math.abs(c.x - x) + Math.abs(c.y - y) <= obsDist))
                 continue;
 
-            const { score } = spawnScoreBreakdown(x, y, agentPositions, obsDist);
+            const { score } = spawnScoreBreakdown(x, y, agentPositions, obsDist, dist);
+            // Spawn tile irraggiungibile ora (muri/nemici) → score ∞ negativo → scarta
+            if (!Number.isFinite(score)) continue;
             options.push(['go_to_spawn', x, y, score]);
         }
         return options;
@@ -292,7 +308,7 @@ function buildSpawnOptions(agentPositions) {
     if (now - _lastPatrolLog > 1000 && options.length > 0) {
         _lastPatrolLog = now;
         const best = options.reduce((b, c) => c[3] > b[3] ? c : b);
-        const bd   = spawnScoreBreakdown(best[1], best[2], agentPositions, obsDist);
+        const bd   = spawnScoreBreakdown(best[1], best[2], agentPositions, obsDist, dist);
         const waited = ((now - lastPickupSeenTime) / 1000).toFixed(1);
         console.log(`[PATROL] attesa ${waited}s / timeout ${(patrolTimeout() / 1000).toFixed(1)}s | ` +
                     `esauste: ${exhaustedZones.size} | best (${best[1]},${best[2]}) score=${bd.score.toFixed(1)} ` +
@@ -312,25 +328,31 @@ function buildSpawnOptions(agentPositions) {
  *   - Altrimenti               → opzioni 'go_pick_up' + 'go_to_spawn'
  */
 export function generateOptions() {
+    // BFS una sola volta: distanze reali di percorso verso tutte le celle,
+    // rispettando muri e nemici. Condivisa da delivery / pickup / spawn.
+    const dist = reachableDistances(
+        beliefs.me, beliefs.mapTiles, getBlockedCells(), beliefs.isDirectionalMap
+    );
+
     if (shouldDeliver()) {
         // In viaggio verso il delivery non siamo "in attesa di spawn":
         // tieni fresca la finestra di pattugliamento.
         lastPickupSeenTime = Date.now();
-        return buildDeliverOptions();
+        return buildDeliverOptions(dist);
     }
 
     // Non sta portando nulla, OPPURE sta portando ma non ha ancora raggiunto
     // la soglia → continua a cercare pacchi da raccogliere
 
     const agentPositions = getAgentPositions();
-    const pickups        = buildPickupOptions(agentPositions);
+    const pickups        = buildPickupOptions(agentPositions, dist);
 
     // C'è almeno un pacco raccoglibile visibile → la zona non è "vuota"
     if (pickups.length > 0) lastPickupSeenTime = Date.now();
 
     return [
         ...pickups,
-        ...buildSpawnOptions(agentPositions),
+        ...buildSpawnOptions(agentPositions, dist),
     ];
 }
 
