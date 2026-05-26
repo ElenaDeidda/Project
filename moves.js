@@ -153,6 +153,42 @@ export function reachableDistances(start, walkableTiles, blocked, isDirectional 
     return dist;
 }
 
+// Azioni opportunistiche: a ogni passo, se mi trovo fisicamente sopra un pacco
+// lo raccolgo, e se sono su una delivery tile con pacchi in mano li consegno —
+// indipendentemente dall'intenzione corrente.
+async function opportunisticActions(me, socket) {
+    const x = Math.round(me.x), y = Math.round(me.y);
+
+    // Pickup: c'è un pacco libero proprio qui sotto?
+    for (const p of beliefs.parcels.values()) {
+        if (p.carriedBy) continue;
+        if (Math.round(p.x) !== x || Math.round(p.y) !== y) continue;
+
+        const picked = await socket.emitPickup();
+        if (picked && picked.length > 0) {
+            beliefs.carrying       = true;
+            beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
+            for (const pp of picked) beliefs.parcels.delete(pp.id);
+            console.log(`[MOVES] pickup opportunistico: ${picked.length} pacchi @ (${x},${y})`);
+        }
+        break;
+    }
+
+    // Delivery: sono su una delivery tile con pacchi in mano?
+    if (beliefs.carrying || beliefs.carriedParcels.length > 0) {
+        const onDelivery = beliefs.deliveryPoints.some(d => d.x === x && d.y === y);
+        if (onDelivery) {
+            const ids     = beliefs.carriedParcels.map(p => p.id);
+            const dropped = await socket.emitPutdown(ids.length > 0 ? ids : undefined);
+            if (dropped && dropped.length > 0) {
+                beliefs.carrying       = false;
+                beliefs.carriedParcels = [];
+                console.log(`[MOVES] delivery opportunistica: ${dropped.length} pacchi @ (${x},${y})`);
+            }
+        }
+    }
+}
+
 export async function navigateTo(
     me,
     target,
@@ -199,6 +235,7 @@ export async function navigateTo(
             if (result && result.x != null) {
                 me.x = result.x;
                 me.y = result.y;
+                await opportunisticActions(me, socket);
             } else {
                 console.warn(`[MOVES] Passo verso ${direction} rifiutato — ricalcolo A* (tentativo ${attempt + 1})`);
                 pathBroken = true;
