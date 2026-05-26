@@ -26,6 +26,11 @@ export class GoPickUp extends PlanBase {
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
         if (this.stopped) throw ['stopped'];
+        // Potrebbe essere già stato raccolto opportunisticamente durante il tragitto
+        if (beliefs.carriedParcels.some(p => p.id === id)) {
+            console.log(`[PLANS] Pacco ${id} già raccolto in transito`);
+            return true;
+        }
 
         const freshParcel = beliefs.parcels.get(id);
         if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito durante la navigazione`];
