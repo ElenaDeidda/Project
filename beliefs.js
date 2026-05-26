@@ -1,5 +1,5 @@
 // beliefs.js — Stato del mondo e funzioni di aggiornamento
-import { smartDist } from './basic_functions.js';
+import { smartDist, parseIntervalMs } from './basic_functions.js';
 
 export const beliefs = {
     me:             { id: '', name: '', x: 0, y: 0, score: 0 },
@@ -57,16 +57,48 @@ export function updateMap(width, height, tiles) {
 }
 
 export function updateSensing(sensing) {
-    beliefs.parcels.clear();
+    const now    = Date.now();
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+    const decayMs = parseIntervalMs(beliefs.config.GAME?.parcels?.decaying_event);
+
+    // --- 1. Aggiorna/inserisce i pacchi visti ORA ---
+    const seen = new Set();
     for (const p of sensing.parcels) {
-        if (!p.carriedBy || p.carriedBy === beliefs.me.id) {
-            beliefs.parcels.set(p.id, {
-                id: p.id, x: p.x, y: p.y,
-                reward: p.reward, carriedBy: p.carriedBy ?? null
-            });
+        // Pacco in mano a un avversario: rimuovilo dalla memoria
+        if (p.carriedBy && p.carriedBy !== beliefs.me.id) {
+            beliefs.parcels.delete(p.id);
+            continue;
         }
+        seen.add(p.id);
+        beliefs.parcels.set(p.id, {
+            id: p.id, x: p.x, y: p.y,
+            reward: p.reward, carriedBy: p.carriedBy ?? null,
+            lastDecay: now,            // ultimo istante in cui ho scontato il decay
+        });
     }
-    console.log(`[updateSensing] parcels visibili:`, beliefs.parcels.size);
+
+    // --- 2. Riconcilia i pacchi NON visti in questo tick (memoria) ---
+    // Senza questo passo un pacco che esce dalla vista sparirebbe subito,
+    // facendo perdere il commitment all'agente → oscillazione tra due target.
+    for (const [id, p] of beliefs.parcels) {
+        if (seen.has(id)) continue;
+
+        // Se è dentro il raggio di osservazione ma non lo vediamo → preso/scaduto
+        if (smartDist(beliefs.me, p) < obsDist) {
+            beliefs.parcels.delete(id);
+            continue;
+        }
+
+        // Fuori vista: scontiamo il reward per il decay maturato dall'ultimo conteggio
+        if (Number.isFinite(decayMs)) {
+            p.reward  -= (now - p.lastDecay) / decayMs;
+            p.lastDecay = now;
+            if (p.reward <= 0) beliefs.parcels.delete(id)
+        }
+
+    }
+
+    console.log(`[updateSensing] parcels visibili:`, seen.size, `| in memoria:`, beliefs.parcels.size - seen.size);
     // console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
 
     const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
