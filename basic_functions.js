@@ -3,6 +3,16 @@
 // Funzioni di utilità condivise tra tutti i moduli.
 // =============================================================
  
+// Converte un intervallo di config ("1s", "500ms", "infinite") in millisecondi.
+// 'infinite'/valori non validi → Infinity.
+export function parseIntervalMs(value) {
+    if (value == null || value === 'infinite') return Infinity;
+    const m = String(value).match(/^(\d+(?:\.\d+)?)\s*(ms|s)?$/);
+    if (!m) return Infinity;
+    const val = parseFloat(m[1]);
+    return (m[2] === 'ms') ? val : val * 1000;
+}
+
 /**
  * Calcola la distanza di Manhattan tra due punti sulla griglia.
  * Arrotonda le coordinate per gestire agenti in movimento (x = 4.6 ecc.)
