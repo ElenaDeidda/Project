@@ -56,10 +56,6 @@ export function updateMap(width, height, tiles) {
     console.log(`[BELIEFS] spawnVisibility calcolata per ${beliefs.spawnVisibility.size} spawn tiles`);
 }
 
-// Per quanto tempo ricordiamo un pacco uscito dal raggio di osservazione,
-// se nemmeno il decay lo ha azzerato prima.
-const PARCEL_MEMORY_TTL = 10000; // ms
-
 export function updateSensing(sensing) {
     const now    = Date.now();
     const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
@@ -78,13 +74,14 @@ export function updateSensing(sensing) {
             id: p.id, x: p.x, y: p.y,
             reward: p.reward, carriedBy: p.carriedBy ?? null,
             lastDecay: now,            // ultimo istante in cui ho scontato il decay
-            forgetAt: now + PARCEL_MEMORY_TTL, // scadenza memoria dall'ultimo avvistamento
         });
     }
 
     // --- 2. Riconcilia i pacchi NON visti in questo tick (memoria) ---
     // Senza questo passo un pacco che esce dalla vista sparirebbe subito,
     // facendo perdere il commitment all'agente → oscillazione tra due target.
+    // Un pacco ricordato viene scontato per il decay maturato e dimenticato
+    // quando il suo valore arriva a 0: è il decay stesso a fargli da scadenza.
     for (const [id, p] of beliefs.parcels) {
         if (seen.has(id)) continue;
 
@@ -98,11 +95,8 @@ export function updateSensing(sensing) {
         if (Number.isFinite(decayMs)) {
             p.reward  -= (now - p.lastDecay) / decayMs;
             p.lastDecay = now;
-            if (p.reward <= 0) { beliefs.parcels.delete(id); continue; }
+            if (p.reward <= 0) beliefs.parcels.delete(id);
         }
-
-        // Scaduto il tempo di memoria (conta dall'ultimo avvistamento) → dimentica
-        if (now > p.forgetAt) beliefs.parcels.delete(id);
     }
 
     console.log(`[updateSensing] parcels visibili:`, seen.size, `| in memoria:`, beliefs.parcels.size - seen.size);
