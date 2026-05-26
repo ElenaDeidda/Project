@@ -13,6 +13,16 @@
  * @param {{x?:number, y?:number}} a2
  * @returns {number} distanza, o Infinity se i punti non sono validi
  */
+// Converte un intervallo di config ("1s", "500ms", "infinite") in millisecondi.
+// 'infinite'/valori non validi → Infinity.
+export function parseIntervalMs(value) {
+    if (value == null || value === 'infinite') return Infinity;
+    const m = String(value).match(/^(\d+(?:\.\d+)?)\s*(ms|s)?$/);
+    if (!m) return Infinity;
+    const val = parseFloat(m[1]);
+    return (m[2] === 'ms') ? val : val * 1000;
+}
+
 export const smartDist = (a1, a2) => {
     if (!a1 || !a2 || a1.x == null || a1.y == null || a2.x == null || a2.y == null)
         return Infinity;

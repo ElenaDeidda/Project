@@ -1,6 +1,6 @@
 // options.js — Generazione opzioni e deliberazione
 import { beliefs, getAgentPositions, getBlockedCells } from './beliefs.js';
-import { scoreParcel, nearestDeliveryDist }  from './basic_functions.js';
+import { scoreParcel, nearestDeliveryDist, parseIntervalMs }  from './basic_functions.js';
 import { reachableDistances }                            from './moves.js';
 
 // Distanza reale di percorso (da BFS) verso (x,y); ∞ se irraggiungibile
@@ -42,14 +42,6 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // Converte un intervallo di config ("1s", "500ms", "infinite", …) in ms.
 // Usato sia per decaying_event (ms per -1 reward) sia per generation_event.
-function parseIntervalMs(value) {
-    if (value == null || value === 'infinite') return Infinity;
-    const m = String(value).match(/^(\d+(?:\.\d+)?)\s*(ms|s)?$/);
-    if (!m) return Infinity;
-    const val = parseFloat(m[1]);
-    return (m[2] === 'ms') ? val : val * 1000;
-}
-
 // Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
 // così i due ragionano sullo stesso "valore nel tempo".
 function decayMsFromConfig() {
