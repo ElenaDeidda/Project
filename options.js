@@ -20,7 +20,7 @@ const N_REDUCE_STEP     = 0.5;    // quanto cala N su un trigger forzato
 const N_INCREASE_STEP   = 0.5;    // quanto sale N dopo una consegna "pulita"
 const NO_PICKUP_TIMEOUT = 6000;   // ms senza raccogliere nuovi pacchi → consegna
 const DECAY_THRESHOLD   = 0.60;   // valore < 60% del picco del carico → consegna
-const NEAR_DELIVERY_FACTOR = 0.5; // se un delivery è a portata visiva, soglia effettiva = N × questo
+const NEAR_DELIVERY_FACTOR = 0.25; // se un delivery è a portata visiva, soglia effettiva = N × questo
 
 // Stato persistente (MAI resettato durante la partita)
 let N_current = null;             // null finché non inizializzato da config
