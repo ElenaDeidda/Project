@@ -2,6 +2,7 @@
 import { beliefs } from './beliefs.js';
 import { navigateTo } from './moves.js';
 import { smartDist } from './basic_functions.js';
+import { getPddlPlan, planToMoves } from 'pddlPlanner.js';
 
 class PlanBase {
     #stopped = false;
