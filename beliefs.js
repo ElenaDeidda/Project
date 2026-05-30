@@ -38,6 +38,7 @@ export function updateMap(width, height, tiles) {
     const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
 
     for (const [key, tile] of beliefs.mapTiles.entries()) {
+        
         if (tile.type != '1') continue;
 
         const [x, y] = key.split('_').map(Number);
