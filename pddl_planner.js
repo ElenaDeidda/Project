@@ -1,62 +1,42 @@
-import { onlineSolver, PddlDomain, PddlAction, PddlProblem, Beliefset } from "@unitn-asa/pddl-client";
+// pddl_planner.js
+// Planner PDDL per Deliveroo — parte 1 del progetto (external planner)
+// Pattern: lab5 del prof + idea del `connected` precalcolato vista nel codice studente.
+//
+// ATTIVAZIONE (.env):  USE_PDDL=true  → tenta PDDL ; false → sempre A*
+// Se il solver va in timeout o fallisce → ritorna null → il chiamante usa A*.
 
-/**
- * PDDL Planner per il progetto Deliveroo
- * 
- * Usa il solver online su solver.planning.domains (nessuna config necessaria).
- * 
- * Come integrarlo nel tuo agente:
- *   import { getPddlPlan } from './pddlPlanner.js';
- * 
- *   const plan = await getPddlPlan(me, map, parcels, deliveryZones);
- *   for (const step of plan) {
- *       await client.move(step.action);   // 'right' | 'left' | 'up' | 'down'
- *   }
- */
+import {
+    onlineSolver,
+    PddlDomain,
+    PddlAction,
+    PddlProblem,
+    Beliefset,
+} from "@unitn-asa/pddl-client";
+
+export const PDDL_ENABLED = process.env.USE_PDDL === 'true';
+console.log(`[PDDL] ${PDDL_ENABLED ? '✅ ATTIVO' : '❌ disabilitato — uso A*'}`);
+
+const PDDL_TIMEOUT_MS = 3000;
 
 
-// ─────────────────────────────────────────────
-// 1. DOMAIN: definisce le azioni possibili
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. DOMAIN — una sola azione `move` + (connected ?from ?to)
+//    Più pulito delle 4 azioni separate: la topologia sta nel predicato connected.
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Crea il dominio PDDL con le 4 azioni di movimento + pickup + putdown.
- * @returns {PddlDomain}
- */
 function buildDeliverooDomain() {
 
-    const moveRight = new PddlAction(
-        'move_right',
+    const move = new PddlAction(
+        'move',
         '?me ?from ?to',
-        'and (me ?me) (at ?me ?from) (right ?from ?to)',
-        'and (at ?me ?to) (not (at ?me ?from))'
-    );
-
-    const moveLeft = new PddlAction(
-        'move_left',
-        '?me ?from ?to',
-        'and (me ?me) (at ?me ?from) (left ?from ?to)',
-        'and (at ?me ?to) (not (at ?me ?from))'
-    );
-
-    const moveUp = new PddlAction(
-        'move_up',
-        '?me ?from ?to',
-        'and (me ?me) (at ?me ?from) (up ?from ?to)',
-        'and (at ?me ?to) (not (at ?me ?from))'
-    );
-
-    const moveDown = new PddlAction(
-        'move_down',
-        '?me ?from ?to',
-        'and (me ?me) (at ?me ?from) (down ?from ?to)',
+        'and (me ?me) (at ?me ?from) (connected ?from ?to) (not (obstacle ?to))',
         'and (at ?me ?to) (not (at ?me ?from))'
     );
 
     const pickup = new PddlAction(
         'pickup',
         '?me ?p ?t',
-        'and (me ?me) (at ?me ?t) (at ?p ?t) (parcel ?p)',
+        'and (me ?me) (at ?me ?t) (parcel ?p) (at ?p ?t)',
         'and (carrying ?me ?p) (not (at ?p ?t))'
     );
 
@@ -64,170 +44,167 @@ function buildDeliverooDomain() {
         'putdown',
         '?me ?p ?t',
         'and (me ?me) (at ?me ?t) (carrying ?me ?p) (delivery ?t)',
-        'and (at ?p ?t) (not (carrying ?me ?p)) (delivered ?p)'
+        'and (delivered ?p) (not (carrying ?me ?p))'
     );
 
-    return new PddlDomain('deliveroo', moveRight, moveLeft, moveUp, moveDown, pickup, putdown);
+    return new PddlDomain('deliveroo', move, pickup, putdown);
 }
 
 
-// ─────────────────────────────────────────────
-// 2. PROBLEM: costruisce lo stato attuale
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Converte coordinate (x, y) in un identificatore PDDL sicuro.
- * Es: tileId(3, 2) → 't3_2'
- */
 function tileId(x, y) {
-    return `t${x}_${y}`;
+    return `t_${Math.round(x)}_${Math.round(y)}`;
 }
 
-/**
- * Costruisce il problema PDDL a partire dalle credenze dell'agente.
- * 
- * @param {{ x: number, y: number, id: string }} me         - posizione e id agente
- * @param {Array<{ x: number, y: number, type: string }>} mapTiles - tutte le celle della mappa
- * @param {Array<{ id: string, x: number, y: number }>} parcels  - pacchi visibili (non ancora consegnati)
- * @param {string} goalParcelId                                   - id del pacco da raccogliere/consegnare
- * @returns {PddlProblem}
- */
-function buildDeliverooProblem(me, mapTiles, parcels, goalParcelId) {
+// Costruisce la lista delle adiacenze `connected` UNA VOLTA.
+// Chiamala da updateMap() in beliefs.js e salva il risultato in beliefs.connections
+// per non ricalcolarlo a ogni piano. Qui la lasciamo standalone per chiarezza.
+export function buildConnections(mapTiles) {
+    const walkable = new Map(); // "x_y" -> {x,y,type}
+    for (const [key, tile] of mapTiles.entries()) {
+        if (String(tile.type) === '0') continue;
+        const [x, y] = key.split('_').map(Number);
+        walkable.set(`${x}_${y}`, { x, y, type: String(tile.type) });
+    }
 
-    const beliefs = new Beliefset();
+    const connections = [];
+    const deliveries  = [];
+    for (const t of walkable.values()) {
+        const id = tileId(t.x, t.y);
+        if (t.type === '2') deliveries.push(id);
 
-    // Agente
-    beliefs.declare(`me agent1`);
-    beliefs.declare(`agent agent1`);
-    beliefs.declare(`at agent1 ${tileId(me.x, me.y)}`);
-
-    // Tiles e adiacenze
-    const walkable = mapTiles.filter(t => t.type !== '0'); // '0' = wall
-
-    for (const tile of walkable) {
-        const id = tileId(tile.x, tile.y);
-        beliefs.declare(`tile ${id}`);
-
-        // Delivery zone
-        if (tile.type === '2') {
-            beliefs.declare(`delivery ${id}`);
+        const neigh = [
+            [t.x + 1, t.y], [t.x - 1, t.y],
+            [t.x, t.y + 1], [t.x, t.y - 1],
+        ];
+        for (const [nx, ny] of neigh) {
+            if (walkable.has(`${nx}_${ny}`)) {
+                connections.push(`connected ${id} ${tileId(nx, ny)}`);
+            }
         }
-
-        // Adiacenze cardinali
-        const right = walkable.find(t => t.x === tile.x + 1 && t.y === tile.y);
-        if (right) beliefs.declare(`right ${id} ${tileId(right.x, right.y)}`);
-
-        const left = walkable.find(t => t.x === tile.x - 1 && t.y === tile.y);
-        if (left) beliefs.declare(`left ${id} ${tileId(left.x, left.y)}`);
-
-        const up = walkable.find(t => t.x === tile.x && t.y === tile.y + 1);
-        if (up) beliefs.declare(`up ${id} ${tileId(up.x, up.y)}`);
-
-        const down = walkable.find(t => t.x === tile.x && t.y === tile.y - 1);
-        if (down) beliefs.declare(`down ${id} ${tileId(down.x, down.y)}`);
     }
-
-    // Pacchi
-    for (const parcel of parcels) {
-        const pid = `p${parcel.id}`;
-        beliefs.declare(`parcel ${pid}`);
-        beliefs.declare(`at ${pid} ${tileId(parcel.x, parcel.y)}`);
-    }
-
-    // Costruisci objects e init
-    const objects = beliefs.objects.join(' ');
-    const init    = beliefs.toPddlString();
-
-    // Goal: pickup + deliver il pacco specificato
-    const goalPddlId = `p${goalParcelId}`;
-    const goal = `(delivered ${goalPddlId})`;
-
-    return new PddlProblem('deliveroo-problem', objects, init, goal);
+    return { connections, deliveries };
 }
 
 
-// ─────────────────────────────────────────────
-// 3. SOLVER: chiama il solver online e restituisce il piano
-// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. PROBLEM — stato attuale (solo pacco target + agenti nemici come ostacoli)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildDeliverooProblem(me, mapTiles, parcels, goalParcelId, enemyAgents = []) {
+
+    const bs = new Beliefset();
+    bs.declare(`me agent1`);
+    bs.declare(`at agent1 ${tileId(me.x, me.y)}`);
+
+    const { connections, deliveries } = buildConnections(mapTiles);
+    for (const c of connections) bs.declare(c);
+    for (const d of deliveries)  bs.declare(`delivery ${d}`);
+
+    // Agenti nemici → ostacoli
+    for (const a of enemyAgents) {
+        if (typeof a.x === 'number' && !isNaN(a.x)) {
+            bs.declare(`obstacle ${tileId(a.x, a.y)}`);
+        }
+    }
+
+    // Solo il pacco target
+    const target = parcels.get(goalParcelId);
+    if (!target) throw new Error(`Pacco ${goalParcelId} non nei beliefs`);
+    const pid = `p${goalParcelId}`;
+    bs.declare(`parcel ${pid}`);
+    bs.declare(`at ${pid} ${tileId(target.x, target.y)}`);
+
+    return new PddlProblem(
+        'deliveroo-problem',
+        bs.objects.join(' '),
+        bs.toPddlString(),
+        `(delivered ${pid})`
+    );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. SOLVER — export principale
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Calcola un piano PDDL per raccogliere e consegnare un pacco.
- * 
- * @param {{ x: number, y: number, id: string }} me
- * @param {Array<{ x: number, y: number, type: string }>} mapTiles
- * @param {Array<{ id: string, x: number, y: number }>} parcels
- * @param {string} goalParcelId - id del pacco da raccogliere e consegnare
- * @returns {Promise<Array<{ action: string, args: string[] }> | null>}
- *   - Array di passi, es: [{ action: 'move_right', args: ['agent1','t0_0','t1_0'] }, ...]
- *   - null se nessun piano trovato
+ * @param {{x:number,y:number}} me
+ * @param {Map<string,{type:string}>} mapTiles
+ * @param {Map<string,object>} parcels
+ * @param {string} goalParcelId
+ * @param {Array<{x:number,y:number}>} enemyAgents
+ * @returns {Promise<Array<{action:string,args:string[]}>|null>}
  */
-export async function getPddlPlan(me, mapTiles, parcels, goalParcelId) {
+export async function getPddlPlan(me, mapTiles, parcels, goalParcelId, enemyAgents = []) {
 
-    const domain  = buildDeliverooDomain();
-    const problem = buildDeliverooProblem(me, mapTiles, parcels, goalParcelId);
+    if (!PDDL_ENABLED) return null;
 
-    console.log('[PDDL] Invio problema al solver online...');
+    let domain, problem;
+    try {
+        domain  = buildDeliverooDomain();
+        problem = buildDeliverooProblem(me, mapTiles, parcels, goalParcelId, enemyAgents);
+    } catch (err) {
+        console.error('[PDDL] Errore costruzione problema:', err.message);
+        return null;
+    }
 
     let rawPlan;
     try {
-        rawPlan = await onlineSolver(domain.toPddlString(), problem.toPddlString());
+        rawPlan = await Promise.race([
+            onlineSolver(domain.toPddlString(), problem.toPddlString()),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`timeout ${PDDL_TIMEOUT_MS}ms`)), PDDL_TIMEOUT_MS)
+            ),
+        ]);
     } catch (err) {
-        console.error('[PDDL] Errore dal solver:', err.message);
+        console.warn('[PDDL] Solver fallito, fallback A*:', err.message);
         return null;
     }
 
     if (!rawPlan || rawPlan.length === 0) {
-        console.warn('[PDDL] Nessun piano trovato per il pacco', goalParcelId);
+        console.warn('[PDDL] Nessun piano per', goalParcelId);
         return null;
     }
 
-    console.log('[PDDL] Piano trovato:', rawPlan.length, 'passi');
-
-    // rawPlan è un array tipo: [{ action: 'move_right', args: ['agent1','t0_0','t1_0'] }, ...]
+    console.log(`[PDDL] Piano trovato: ${rawPlan.length} passi`);
     return rawPlan;
 }
 
 
-/**
- * Converte un piano PDDL in una sequenza di mosse semplici da eseguire.
- * 
- * @param {Array<{ action: string }>} plan
- * @returns {string[]} Array di direzioni: 'right' | 'left' | 'up' | 'down' | 'pickup' | 'putdown'
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. PIANO → MOSSE
+//    Il solver restituisce action/args in UPPERCASE:
+//    {action:'MOVE', args:['AGENT1','T_0_0','T_1_0']}
+//    Ricaviamo la direzione confrontando le coordinate from→to.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseCoords(tileLabel) {
+    // 'T_3_4' o 't_3_4' → {x:3, y:4}
+    const m = tileLabel.toLowerCase().match(/t_(\d+)_(\d+)/);
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+}
+
 export function planToMoves(plan) {
-    const moveMap = {
-        'move_right': 'right',
-        'move_left':  'left',
-        'move_up':    'up',
-        'move_down':  'down',
-        'pickup':     'pickup',
-        'putdown':    'putdown',
-    };
+    const moves = [];
+    for (const step of plan) {
+        const act = step.action.toLowerCase();
 
-    return plan.map(step => moveMap[step.action] ?? step.action);
+        if (act === 'pickup')  { moves.push('pickup');  continue; }
+        if (act === 'putdown') { moves.push('putdown'); continue; }
+
+        if (act === 'move') {
+            const from = parseCoords(step.args[1]);
+            const to   = parseCoords(step.args[2]);
+            if (!from || !to) continue;
+            if (to.x > from.x) moves.push('right');
+            else if (to.x < from.x) moves.push('left');
+            else if (to.y > from.y) moves.push('up');
+            else if (to.y < from.y) moves.push('down');
+        }
+    }
+    return moves;
 }
-
-
-// ─────────────────────────────────────────────
-// 4. ESEMPIO DI USO (decommentare per testare standalone)
-// ─────────────────────────────────────────────
-
-/*
-// Test rapido: mappa 3x3, agente in (0,0), pacco in (2,0), delivery in (2,2)
-const ME = { id: 'agent1', x: 0, y: 0 };
-
-const MAP = [
-    { x: 0, y: 0, type: '1' }, { x: 1, y: 0, type: '1' }, { x: 2, y: 0, type: '1' },
-    { x: 0, y: 1, type: '1' }, { x: 1, y: 1, type: '1' }, { x: 2, y: 1, type: '1' },
-    { x: 0, y: 2, type: '1' }, { x: 1, y: 2, type: '1' }, { x: 2, y: 2, type: '2' }, // delivery
-];
-
-const PARCELS = [{ id: 'abc123', x: 2, y: 0 }];
-
-const plan = await getPddlPlan(ME, MAP, PARCELS, 'abc123');
-if (plan) {
-    const moves = planToMoves(plan);
-    console.log('Mosse:', moves);
-    // ['right', 'right', 'pickup', 'up', 'up', 'putdown']
-}
-*/
