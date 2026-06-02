@@ -1,1 +1,4 @@
 .env
+.env.bdi
+.env.llm
+.env.local

@@ -1,9 +1,17 @@
-import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
-import { startLlmAgent } from "./llm_agent.js";
-import { navigateTo } from "./moves.js";
-import { beliefs, updateConfig, updateMap, updateSensing } from "./beliefs.js";
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+import fs from 'fs';
+
+// Cerca .env.llm specifico per l'LLM, altrimenti usa .env condiviso.
+// Va caricato PRIMA degli altri import perché llm_agent.js legge process.env
+// (LITELLM_API_KEY, LOCAL_MODEL, LLM_TEMP) al momento dell'import.
+const envFile = fs.existsSync('.env.llm') ? '.env.llm' : '.env';
+dotenv.config({ path: envFile, override: true });
+console.log(`[LLM] env caricato da ${envFile}`);
+
+const { DjsConnect } = await import("@unitn-asa/deliveroo-js-sdk/client");
+const { startLlmAgent } = await import("./llm_agent.js");
+const { navigateTo } = await import("./moves.js");
+const { beliefs, updateConfig, updateMap, updateSensing } = await import("./beliefs.js");
 // 1. Connessione al gioco
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
 
