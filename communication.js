@@ -55,7 +55,7 @@ export function initComms(socket) {
 
     // Handshake iniziale: annuncio la mia presenza al team
     socket.emitShout({ teamId: TEAM_ID, type: 'hello', payload: { role: MY_ROLE } });
-    console.log(`[COMMS] Inizializzato — team=${TEAM_ID} role=${MY_ROLE}`);
+    // console.log(`[COMMS] Inizializzato — team=${TEAM_ID} role=${MY_ROLE}`);
 }
 
 

@@ -5,6 +5,9 @@
 // ATTIVAZIONE (.env):  USE_PDDL=true  → tenta PDDL ; false → sempre A*
 // Se il solver va in timeout o fallisce → ritorna null → il chiamante usa A*.
 
+import dotenv from 'dotenv';
+dotenv.config();
+
 import {
     onlineSolver,
     PddlDomain,
@@ -14,7 +17,7 @@ import {
 } from "@unitn-asa/pddl-client";
 
 export const PDDL_ENABLED = process.env.USE_PDDL === 'true';
-console.log(`[PDDL] ${PDDL_ENABLED ? '✅ ATTIVO' : '❌ disabilitato — uso A*'}`);
+ console.log(`[PDDL] ${PDDL_ENABLED ? '✅ ATTIVO' : '❌ disabilitato — uso A*'}`);
 
 const PDDL_TIMEOUT_MS = 3000;
 
@@ -148,7 +151,7 @@ export async function getPddlPlan(me, mapTiles, parcels, goalParcelId, enemyAgen
         domain  = buildDeliverooDomain();
         problem = buildDeliverooProblem(me, mapTiles, parcels, goalParcelId, enemyAgents);
     } catch (err) {
-        console.error('[PDDL] Errore costruzione problema:', err.message);
+         console.error('[PDDL] Errore costruzione problema:', err.message);
         return null;
     }
 
@@ -170,7 +173,7 @@ export async function getPddlPlan(me, mapTiles, parcels, goalParcelId, enemyAgen
         return null;
     }
 
-    console.log(`[PDDL] Piano trovato: ${rawPlan.length} passi`);
+     console.log(`[PDDL] Piano trovato: ${rawPlan.length} passi`);
     return rawPlan;
 }
 

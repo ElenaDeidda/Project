@@ -104,7 +104,7 @@ function resetCollection() {
     // un po' di più: alza N (adattamento bidirezionale).
     if (deliverReason === 'threshold' && N_current !== null) {
         N_current = clamp(N_current + N_INCREASE_STEP, N_MIN, capacityCap());
-        console.log(`[OPTIONS] Consegna pulita → N = ${N_current.toFixed(1)}`);
+        // console.log(`[OPTIONS] Consegna pulita → N = ${N_current.toFixed(1)}`);
     }
     batchPeak        = 0;
     lastPickupTime   = null;
@@ -124,7 +124,7 @@ function shouldDeliver() {
     // Inizializzazione una-tantum di N dalla config
     if (N_current === null) {
         N_current = computeInitialN();
-        console.log(`[OPTIONS] N iniziale = ${N_current.toFixed(1)}`);
+        // console.log(`[OPTIONS] N iniziale = ${N_current.toFixed(1)}`);
     }
 
     if (deliverLatch) return true;
@@ -144,7 +144,7 @@ function shouldDeliver() {
 
     // 1. Capacità piena → consegna (pulita)
     if (count >= capacity) {
-        console.log(`[OPTIONS] Capacità piena → consegna`);
+        // console.log(`[OPTIONS] Capacità piena → consegna`);
         deliverReason = 'threshold';
         return (deliverLatch = true);
     }
@@ -152,7 +152,7 @@ function shouldDeliver() {
     // 2. Trigger: troppo tempo senza raccogliere nuovi pacchi → consegna + abbassa N
     if (now - lastPickupTime > NO_PICKUP_TIMEOUT) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        console.log(`[OPTIONS] ${NO_PICKUP_TIMEOUT}ms senza pickup → consegna, N = ${N_current.toFixed(1)}`);
+        // console.log(`[OPTIONS] ${NO_PICKUP_TIMEOUT}ms senza pickup → consegna, N = ${N_current.toFixed(1)}`);
         deliverReason = 'trigger';
         return (deliverLatch = true);
     }
@@ -160,7 +160,7 @@ function shouldDeliver() {
     // 3. Trigger: valore decaduto sotto soglia rispetto al picco → consegna + abbassa N
     if (batchPeak > 0 && value < batchPeak * DECAY_THRESHOLD) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna, N = ${N_current.toFixed(1)}`);
+        // console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna, N = ${N_current.toFixed(1)}`);
         deliverReason = 'trigger';
         return (deliverLatch = true);
     }
@@ -178,8 +178,8 @@ function shouldDeliver() {
         // 'opportunistic' = consegna anticipata perché il delivery è a portata:
         // NON deve influenzare l'adattamento di N (né su né giù).
         deliverReason = (nearDelivery && effN < N_current) ? 'opportunistic' : 'threshold';
-        console.log(`[OPTIONS] Soglia${nearDelivery ? ` (delivery a dist ${delDist} ≤ ${obsDist})` : ''}: ` +
-                    `${value.toFixed(0)} ≥ ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) → consegna`);
+        // console.log(`[OPTIONS] Soglia${nearDelivery ? ` (delivery a dist ${delDist} ≤ ${obsDist})` : ''}: ` +
+        //             `${value.toFixed(0)} ≥ ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) → consegna`);
         return (deliverLatch = true);
     }
 
@@ -274,8 +274,8 @@ function buildSpawnOptions(agentPositions, dist) {
         const waited = ((now - lastPickupSeenTime) / 1000).toFixed(1);
         exhaustedZones.set(`${cx}_${cy}`, now + patrolTimeout() * EXHAUST_COOLDOWN_FACTOR);
         lastPickupSeenTime = now;
-        console.log(`[PATROL] Zona (${cx},${cy}) esausta dopo ${waited}s senza pacchi ` +
-                    `(timeout ${(patrolTimeout() / 1000).toFixed(1)}s) → rilocazione | zone esauste: ${exhaustedZones.size}`);
+        // console.log(`[PATROL] Zona (${cx},${cy}) esausta dopo ${waited}s senza pacchi ` +
+        //             `(timeout ${(patrolTimeout() / 1000).toFixed(1)}s) → rilocazione | zone esauste: ${exhaustedZones.size}`);
     }
 
     const exhaustCenters = [...exhaustedZones.keys()].map(k => {
@@ -314,9 +314,9 @@ function buildSpawnOptions(agentPositions, dist) {
         const best = options.reduce((b, c) => c[3] > b[3] ? c : b);
         const bd   = spawnScoreBreakdown(best[1], best[2], agentPositions, obsDist, dist);
         const waited = ((now - lastPickupSeenTime) / 1000).toFixed(1);
-        console.log(`[PATROL] attesa ${waited}s / timeout ${(patrolTimeout() / 1000).toFixed(1)}s | ` +
-                    `esauste: ${exhaustedZones.size} | best (${best[1]},${best[2]}) score=${bd.score.toFixed(1)} ` +
-                    `[prox=${bd.prox} vis=${bd.vis} nemici=${bd.enemies}(${bd.enemy})]`);
+        // console.log(`[PATROL] attesa ${waited}s / timeout ${(patrolTimeout() / 1000).toFixed(1)}s | ` +
+        //             `esauste: ${exhaustedZones.size} | best (${best[1]},${best[2]}) score=${bd.score.toFixed(1)} ` +
+        //             `[prox=${bd.prox} vis=${bd.vis} nemici=${bd.enemies}(${bd.enemy})]`);
     }
 
     return options;
@@ -429,7 +429,7 @@ export function deliberate(options) {
         spawns.sort((a, b) => b[3] - a[3]);
         const best = spawns[0];
         const top2 = spawns.slice(0, 2).map(o => `(${o[1]},${o[2]})=${o[3].toFixed(1)}`).join(' | ');
-        console.log(`[DELIBERATE] spawn top2: ${top2}`);
+        // console.log(`[DELIBERATE] spawn top2: ${top2}`);
         const cur = spawns.find(o => _optionKey(o) === committedKey);
         if (cur && _optionKey(best) !== committedKey &&
             !_shouldSwitch(best, cur, o => o[3], true))
