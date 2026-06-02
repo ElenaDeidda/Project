@@ -173,14 +173,18 @@ async function runMission(missionText, ctx) {
         const out = await callModel(messages, { temperature: 0 });
         messages.push({ role: 'assistant', content: out });
 
+        console.log(`[LLM] step ${step + 1} ──────────`);
+        console.log(out);
+
         const final = extractFinal(out);
         if (final) {
-            // console.log(`[LLM] ✅ Missione completata: ${final}`);
+            console.log(`[LLM] ✅ Missione completata: ${final}`);
             return final;
         }
 
         const act = extractAction(out);
         if (!act) {
+            console.warn('[LLM] formato non valido — chiedo di riprovare');
             messages.push({ role: 'user', content: 'Invalid format. Use Action or Final Answer.' });
             continue;
         }
@@ -197,11 +201,11 @@ async function runMission(missionText, ctx) {
             }
         }
 
-        // console.log(`[LLM] ${act.action}(${act.input}) → ${observation}`);
+        console.log(`[LLM] ${act.action}(${act.input}) → ${observation}`);
         messages.push({ role: 'user', content: `Observation: ${observation}` });
     }
 
-    // console.warn('[LLM] Limite iterazioni raggiunto senza Final Answer');
+    console.warn('[LLM] Limite iterazioni raggiunto senza Final Answer');
     return null;
 }
 
