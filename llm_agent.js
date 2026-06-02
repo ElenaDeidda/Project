@@ -16,7 +16,7 @@
 
 import 'dotenv/config';
 import OpenAI from 'openai';
-import { evaluateMission } from './mission_evaluator.js';
+import { initQueue, enqueue } from './mission_queue.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM — LiteLLM UniTN (come lab8)
@@ -180,7 +180,15 @@ function extractFinal(text) {
 
 const MAX_STEPS = 8;
 
-async function runMission(missionText, ctx) {
+/**
+ * Esegue una missione con il loop ReAct.
+ * @param {string} missionText
+ * @param {object} ctx        contesto con { socket, beliefs, deps, lastSender }
+ * @param {AbortSignal} [signal]   se .aborted=true la missione viene interrotta
+ *                                 fra uno step e l'altro (la chiamata LLM in corso
+ *                                 viene comunque attesa fino alla fine)
+ */
+async function runMission(missionText, ctx, signal = null) {
     const tools  = makeTools(ctx);
     const prompt = buildPrompt(Object.keys(tools));
 
@@ -190,15 +198,25 @@ async function runMission(missionText, ctx) {
     ];
 
     for (let step = 0; step < MAX_STEPS; step++) {
+        if (signal?.aborted) {
+            console.log(`[LLM] missione interrotta dalla queue`);
+            return null;
+        }
+
         const out = await callModel(messages, { temperature: 0 });
         messages.push({ role: 'assistant', content: out });
 
         console.log(`[LLM] step ${step + 1} ──────────`);
         console.log(out);
 
+        if (signal?.aborted) {
+            console.log(`[LLM] missione interrotta dopo lo step ${step + 1}`);
+            return null;
+        }
+
         const final = extractFinal(out);
         if (final) {
-            console.log(`[LLM] ✅ Missione completata: ${final}`);
+            console.log(`[LLM] Missione completata: ${final}`);
             return final;
         }
 
@@ -240,31 +258,33 @@ async function runMission(missionText, ctx) {
  * @param {{navigateTo:Function, getPddlPlan?:Function}} deps  i tuoi piani
  */
 export function startLlmAgent(socket, beliefs, deps) {
-    // ctx è condiviso tra l'handler onMsg e i tool: `lastSender` viene letto
-    // dal tool `answer` per rispondere a chi ha mandato la missione.
+    // ctx è condiviso tra le missioni: la queue ne aggiorna `lastSender` prima
+    // di ogni esecuzione, e il tool `answer` lo legge per rispondere al mittente.
     const ctx = { socket, beliefs, deps, lastSender: null };
 
-    // Ascolta SOLO: nessun handshake, nessun broadcast.
-    socket.onMsg(async (id, name, msg) => {
+    // Bridge: la queue esegue le missioni chiamando questa funzione.
+    // Riceve text, senderId e un AbortSignal.
+    async function executeMission(text, senderId, signal) {
+        ctx.lastSender = senderId;
+        return await runMission(text, ctx, signal);
+    }
+
+    initQueue({ beliefs, runMission: executeMission });
+
+    // Ascolto chat: SOLO lettura, nessun handshake.
+    // Ogni messaggio plausibile come missione viene messo in coda con priorità.
+    socket.onMsg((id, name, msg) => {
         // Una missione è una stringa o un oggetto {mission:'...'} / {text:'...'}.
-        // Tutto il resto (handshake di team, repliche, payload strutturati) → ignora.
+        // Tutto il resto (payload strutturati interni) viene ignorato.
         let text = null;
         if (typeof msg === 'string') text = msg;
         else if (msg && typeof msg.mission === 'string') text = msg.mission;
         else if (msg && typeof msg.text    === 'string') text = msg.text;
         if (!text) return;
 
-        ctx.lastSender = id;
         console.log(`[LLM] Mission da ${name} (${id}): "${text}"`);
-
-        // 1. VALUTA se conviene
-        const verdict = evaluateMission(text, beliefs);
-        console.log(`[LLM] Valutazione: ${verdict.reason} → ${verdict.worth ? 'ESEGUO' : 'IGNORO'}`);
-        if (!verdict.worth) return;
-
-        // 2. ESEGUI con il loop ReAct
-        await runMission(text, ctx);
+        enqueue(text, id);
     });
 
-    console.log('[LLM] Avviato — in ascolto di special missions (solo read)');
+    console.log('[LLM] Avviato — coda missioni attiva, in ascolto chat');
 }
