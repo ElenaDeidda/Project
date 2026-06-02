@@ -24,9 +24,21 @@ export function extractReward(text) {
     const mult = t.match(/(\d+)\s*x\s*(pts|points|punti)/);
     if (mult) return Number(mult[1]) * 10;
 
-    // Pattern con segno esplicito: +10pts, -10pt, 200 points
+    // Pattern con unità esplicita: +10pts, -10pt, 200 points
     const signed = t.match(/([+-]?\d+)\s*(pts|points|punti|pt)\b/);
     if (signed) return Number(signed[1]);
+
+    // Fallback: numero (con segno) preceduto da verbi tipici di reward.
+    // Match "to get +10", "earn 50", "lose 5", "you receive 200".
+    // Se il verbo è "loss-like" (lose/perdi/perdere), forza il segno negativo.
+    const verb = t.match(
+        /(get|gain|earn|score|win|receive|reward|lose|perdi|perd[eo]|guadagn[aiou]+)\s*[a-z\s]{0,15}?([+-]?\d+)\b/
+    );
+    if (verb) {
+        const isLoss = /^(lose|perdi|perd[eo])$/.test(verb[1]);
+        const n      = Number(verb[2]);
+        return isLoss ? -Math.abs(n) : n;
+    }
 
     return null;
 }
