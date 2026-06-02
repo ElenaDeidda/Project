@@ -6,10 +6,9 @@
 // Pattern di esecuzione: ReAct (Thought / Action / Action Input / Observation),
 // preso dal lab8.
 //
-// STRUTTURA ESTENSIBILE:
-//   Livello 1 (implementato): move, calculate, answer, pickup, putdown
-//   Livello 2 (predisposto):  registra nuovi tool in TOOLS (es. deliver_stack)
-//   Livello 3 (predisposto):  usa communication.js per coordinare col BDI
+// SCOPE attuale: L1 + L2 (no coordinamento BDI ↔ LLM).
+//   - Solo lettura della chat per ricevere missioni (nessun handshake/hello)
+//   - Scrittura in chat SOLO via il tool `answer`, quando la missione lo richiede
 //
 // USO:
 //   import { startLlmAgent } from './llm_agent.js';
@@ -18,7 +17,6 @@
 import 'dotenv/config';
 import OpenAI from 'openai';
 import { evaluateMission } from './mission_evaluator.js';
-import { initComms, broadcast, getTeammates, sendTo } from './communication.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM — LiteLLM UniTN (come lab8)
@@ -90,19 +88,15 @@ function makeTools(ctx) {
             return r && r.length ? `Consegnati ${r.length} pacchi` : 'Niente da consegnare';
         },
 
-        // ── L1: rispondi alla game chat / al mittente del prompt ────────────
+        // ── L1: rispondi al mittente della missione ─────────────────────────
+        // Le missioni-domanda ("capital of Italy?", "calcola 5*5") richiedono
+        // di mandare la risposta all'agente che ha inviato il prompt.
+        // ctx.lastSender è popolato in startLlmAgent al momento di onMsg.
         answer: (input) => {
-            // La missione dice "send the answer to the agent who sent the prompt"
-            broadcast('mission_answer', { answer: String(input) });
-            // console.log(`[LLM] Risposta inviata: ${input}`);
-            return `Risposta inviata: ${input}`;
-        },
-
-        // ── L3 (predisposto): chiedi al BDI di fare qualcosa ────────────────
-        tell_bdi: (input) => {
-            const mates = getTeammates();
-            for (const id of mates) sendTo(id, 'llm_request', { text: String(input) });
-            return `Richiesta inviata al BDI: ${input}`;
+            const to = ctx.lastSender;
+            if (!to) return 'Error: nessun mittente noto a cui rispondere';
+            socket.emitSay(to, { type: 'mission_answer', answer: String(input) });
+            return `Risposta inviata a ${to}: ${input}`;
         },
     };
 }
@@ -123,8 +117,8 @@ Available tools:
 - navigate_to(x,y): moves the agent to coordinate x,y
 - pickup(): picks up parcels on the current tile
 - putdown(): drops carried parcels on the current tile
-- answer(text): sends a textual answer back (for questions like "capital of Italy?")
-- tell_bdi(text): asks the BDI teammate to do something (coordination missions)
+- answer(text): sends a textual answer back to the agent who sent the mission
+  (use for questions like "what is the capital of Italy?")
 
 STRICT OUTPUT FORMAT — choose exactly one:
 
@@ -222,26 +216,31 @@ async function runMission(missionText, ctx) {
  * @param {{navigateTo:Function, getPddlPlan?:Function}} deps  i tuoi piani
  */
 export function startLlmAgent(socket, beliefs, deps) {
-    initComms(socket, beliefs);
-    const ctx = { socket, beliefs, deps };
+    // ctx è condiviso tra l'handler onMsg e i tool: `lastSender` viene letto
+    // dal tool `answer` per rispondere a chi ha mandato la missione.
+    const ctx = { socket, beliefs, deps, lastSender: null };
 
-    // Le special missions arrivano dal server. A seconda dell'SDK possono arrivare
-    // come messaggio dedicato; qui ascoltiamo onMsg con un type 'mission'.
+    // Ascolta SOLO: nessun handshake, nessun broadcast.
     socket.onMsg(async (id, name, msg) => {
-        // Missione in linguaggio naturale (stringa) o oggetto {mission:'...'}
-        const text = typeof msg === 'string' ? msg : msg?.mission;
+        // Una missione è una stringa o un oggetto {mission:'...'} / {text:'...'}.
+        // Tutto il resto (handshake di team, repliche, payload strutturati) → ignora.
+        let text = null;
+        if (typeof msg === 'string') text = msg;
+        else if (msg && typeof msg.mission === 'string') text = msg.mission;
+        else if (msg && typeof msg.text    === 'string') text = msg.text;
         if (!text) return;
 
-        // console.log(`[LLM] 📩 Special mission ricevuta: "${text}"`);
+        ctx.lastSender = id;
+        console.log(`[LLM] Mission da ${name} (${id}): "${text}"`);
 
         // 1. VALUTA se conviene
         const verdict = evaluateMission(text, beliefs);
-        // console.log(`[LLM] Valutazione: ${verdict.reason} → ${verdict.worth ? 'ESEGUO' : 'IGNORO'}`);
+        console.log(`[LLM] Valutazione: ${verdict.reason} → ${verdict.worth ? 'ESEGUO' : 'IGNORO'}`);
         if (!verdict.worth) return;
 
         // 2. ESEGUI con il loop ReAct
         await runMission(text, ctx);
     });
 
-    // console.log('[LLM] Agente LLM avviato — in ascolto di special missions');
+    console.log('[LLM] Avviato — in ascolto di special missions (solo read)');
 }

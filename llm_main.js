@@ -20,9 +20,9 @@ socket.onYou(me => {
 });
 socket.onSensing(s => updateSensing(s));
 
-// 3. Aspetta che il server mandi 'you' (con teamId) prima di avviare l'LLM:
-//    initComms() ha bisogno di beliefs.me.teamId per filtrare i messaggi del team.
+// 3. Aspetta il primo evento 'you' così beliefs.me ha posizione, id e teamId
+//    prima che eventuali missioni inneschino tool che li leggono (navigate_to).
 await new Promise(res => socket.once('you', res));
 
-// 4. Avvia l'agente LLM
+// 4. Avvia l'agente LLM (solo lettura chat per missioni; nessun handshake)
 startLlmAgent(socket, beliefs, { navigateTo });
