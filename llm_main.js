@@ -1,10 +1,10 @@
-import 'dotenv/config';
 import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
 import { startLlmAgent } from "./llm_agent.js";
 import { navigateTo } from "./moves.js";
 import { beliefs } from "./beliefs.js";
 import { updateSensing } from "./beliefs.js";  // o come si chiama nel tuo codice
-
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 // 1. Connessione al gioco
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
 
