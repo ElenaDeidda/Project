@@ -2,7 +2,7 @@
 import { smartDist, parseIntervalMs } from './basic_functions.js';
 
 export const beliefs = {
-    me:             { id: '', name: '', x: 0, y: 0, score: 0 },
+    me:             { id: '', name: '', teamId: '', teamName: '', x: 0, y: 0, score: 0 },
     config:         {},
     mapTiles:       new Map(),
     isDirectionalMap: false,

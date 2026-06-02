@@ -222,7 +222,7 @@ async function runMission(missionText, ctx) {
  * @param {{navigateTo:Function, getPddlPlan?:Function}} deps  i tuoi piani
  */
 export function startLlmAgent(socket, beliefs, deps) {
-    initComms(socket);
+    initComms(socket, beliefs);
     const ctx = { socket, beliefs, deps };
 
     // Le special missions arrivano dal server. A seconda dell'SDK possono arrivare
