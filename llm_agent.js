@@ -82,9 +82,24 @@ function snapshotWorld(beliefs) {
 
     // Delivery points
     const dps = beliefs.deliveryPoints ?? [];
-    lines.push(`delivery_points (${dps.length}): ${
+    lines.push(`delivery_points (${dps.length}) [drop parcels HERE to score]: ${
         dps.length ? dps.map(d => `(${d.x},${d.y})`).join(' ') : 'none'
     }`);
+
+    // Spawn-rich tiles: dove i pacchi possono apparire. NON sono delivery!
+    // Espone i top-N per visibilità (= quante spawn tiles si vedono da lì):
+    // sono i posti migliori dove andare/aspettare per trovare pacchi.
+    const spawnVis = beliefs.spawnVisibility ?? new Map();
+    if (spawnVis.size > 0) {
+        const top = [...spawnVis.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5);
+        const list = top.map(([key, vis]) => {
+            const [x, y] = key.split('_').map(Number);
+            return `(${x},${y}) vis=${vis}`;
+        }).join(' ');
+        lines.push(`top_spawn_tiles (${spawnVis.size} total) [parcels APPEAR here]: ${list}`);
+    }
 
     // Pacchi visibili
     const parcels = [...(beliefs.parcels?.values() ?? [])];
@@ -228,6 +243,24 @@ Rules:
 - For missions that reference world features (positions, distances, what you
   carry, delivery points, leftmost/rightmost/edge, nearest parcel, ...) ALWAYS
   call inspect() FIRST to read real values from the world. Never guess.
+
+WORLD MODEL — read carefully:
+- delivery_points: tiles where you DROP parcels with putdown() to score points.
+  Parcels are NOT generated here. Going to a delivery_point looking for parcels
+  is wrong.
+- top_spawn_tiles: tiles where the server SPAWNS parcels. To FIND parcels,
+  navigate to one of these (the highest vis= score is the best lookout).
+- visible_free_parcels: parcels on the ground inside your observation_distance.
+  If empty, you can't see any from where you are — move to a top_spawn_tile and
+  call inspect() again.
+
+For "pick the nearest parcel and deliver" type missions:
+  1. inspect() → look at visible_free_parcels
+  2. If empty: navigate_to a top_spawn_tile → inspect() again (parcels may have
+     entered your observation range)
+  3. Once you see a parcel: navigate_to its (x,y) → pickup()
+  4. inspect() → choose the NEAREST delivery_point from your position
+  5. navigate_to that delivery → putdown()
 - If navigate_to returns "irraggiungibile" twice for the SAME target, the tile
   is truly a wall: stop trying it and produce Final Answer explaining you
   could not reach the destination. Do not try random nearby tiles.
