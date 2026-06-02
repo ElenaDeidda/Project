@@ -136,8 +136,28 @@ Rules:
 - Never output an Action and a Final Answer in the same message.
 - Do not invent tool results. Wait for the Observation.
 - For arithmetic, ALWAYS use calculate; never compute yourself.
-- For factual questions, use answer with the correct response.
-- After all required tool results are observed, give Final Answer.
+
+MISSION TYPES — IMPORTANT:
+The server gives points ONLY when the result is delivered back. There are two
+types of missions:
+
+1) QUESTION / CALCULATION missions (e.g. "Calcola 5*5", "What is the capital
+   of Italy?", "Quanto fa 7+3?"). The server CANNOT see what you "thought" —
+   it only sees what you sent via the answer() tool.
+   You MUST end such missions with:
+     Action: answer
+     Action Input: <the final result, e.g. "25" or "Rome">
+   Only AFTER the answer() Observation, output Final Answer.
+
+2) ACTION missions (e.g. "Move to (4,7)", "Pick up the parcel at (2,3)"). The
+   server checks the world state, not chat. Do the actions (navigate_to,
+   pickup, putdown). No answer() needed. Then Final Answer.
+
+For calculation missions, the flow is exactly:
+   Step 1: Action: calculate / Action Input: <expression>
+   Step 2: (after the Result observation) Action: answer / Action Input: <number>
+   Step 3: Final Answer: ...
+
 - Use only the available tools: ${toolNames.join(', ')}.
 `.trim();
 }
