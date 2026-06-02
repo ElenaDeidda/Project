@@ -26,6 +26,10 @@ const baseURL = process.env.LITELLM_BASE_URL || 'https://llm.bears.disi.unitn.it
 const apiKey  = process.env.LITELLM_API_KEY;
 const MODEL   = process.env.LOCAL_MODEL || 'llama-3.3-70b-lmstudio';
 
+// Temperatura del modello (0 = deterministico ma rigido; 0.2-0.3 = poco esplorativo
+// ma riesce a uscire da loop quando un tool fallisce). Override con LLM_TEMP nel .env.
+const TEMP    = Number(process.env.LLM_TEMP ?? 0.2);
+
 if (!apiKey) {
     // console.error('[LLM] Manca LITELLM_API_KEY nel .env');
     process.exit(1);
@@ -33,7 +37,7 @@ if (!apiKey) {
 
 const client = new OpenAI({ baseURL, apiKey });
 
-async function callModel(messages, { temperature = 0 } = {}) {
+async function callModel(messages, { temperature = TEMP } = {}) {
     const res = await client.chat.completions.create({ model: MODEL, messages, temperature });
     return res.choices?.[0]?.message?.content ?? '';
 }
