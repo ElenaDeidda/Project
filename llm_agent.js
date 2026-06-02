@@ -14,7 +14,6 @@
 //   import { startLlmAgent } from './llm_agent.js';
 //   startLlmAgent(socket, beliefs, { navigateTo, getPddlPlan });
 
-import 'dotenv/config';
 import OpenAI from 'openai';
 import { initQueue, enqueue } from './mission_queue.js';
 
@@ -44,10 +43,90 @@ async function callModel(messages, { temperature = TEMP } = {}) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// SNAPSHOT DEL MONDO — usato dal tool `inspect`
+// Espone tutti i beliefs in forma testuale compatta. Quello che conosce il
+// BDI lo conosce anche l'LLM. Se aggiungi un campo ai beliefs e lo vuoi
+// visibile all'LLM, aggiungilo qui.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function snapshotWorld(beliefs) {
+    const me = beliefs.me ?? {};
+    const lines = [];
+
+    // Identità + stato
+    lines.push(`me: id=${me.id} name=${me.name} team=${me.teamName}(${me.teamId})`);
+    lines.push(`position: x=${Math.round(me.x)} y=${Math.round(me.y)} score=${me.score ?? '?'}`);
+
+    // Carico
+    const carried = beliefs.carriedParcels ?? [];
+    if (carried.length === 0) {
+        lines.push('carrying: none');
+    } else {
+        lines.push(`carrying: ${carried.length} parcels [${
+            carried.map(p => `${p.id}(reward=${p.reward})`).join(', ')
+        }]`);
+    }
+
+    // Mappa: bordi e tipo
+    const mapTiles = beliefs.mapTiles ?? new Map();
+    if (mapTiles.size > 0) {
+        const xs = [], ys = [];
+        for (const k of mapTiles.keys()) {
+            const [x, y] = k.split('_').map(Number);
+            xs.push(x); ys.push(y);
+        }
+        lines.push(`map_bounds: xmin=${Math.min(...xs)} xmax=${Math.max(...xs)} ymin=${Math.min(...ys)} ymax=${Math.max(...ys)} tiles=${mapTiles.size} directional=${!!beliefs.isDirectionalMap}`);
+    } else {
+        lines.push('map_bounds: not loaded');
+    }
+
+    // Delivery points
+    const dps = beliefs.deliveryPoints ?? [];
+    lines.push(`delivery_points (${dps.length}): ${
+        dps.length ? dps.map(d => `(${d.x},${d.y})`).join(' ') : 'none'
+    }`);
+
+    // Pacchi visibili
+    const parcels = [...(beliefs.parcels?.values() ?? [])];
+    const free    = parcels.filter(p => !p.carriedBy);
+    if (free.length === 0) {
+        lines.push('visible_free_parcels: none');
+    } else {
+        lines.push(`visible_free_parcels (${free.length}):`);
+        for (const p of free) {
+            lines.push(`  id=${p.id} at=(${Math.round(p.x)},${Math.round(p.y)}) reward=${Math.round(p.reward)}`);
+        }
+    }
+
+    // Agenti visibili (nemici / altri)
+    const agents = [...(beliefs.agents?.values() ?? [])];
+    if (agents.length === 0) {
+        lines.push('visible_agents: none');
+    } else {
+        lines.push(`visible_agents (${agents.length}):`);
+        for (const a of agents) {
+            lines.push(`  at=(${Math.round(a.x)},${Math.round(a.y)}) moving=${a.moving} dir=${a.direction}`);
+        }
+    }
+
+    // Config rilevante per le decisioni
+    const cfg = beliefs.config?.GAME ?? {};
+    const cfgBits = [];
+    if (cfg.player?.capacity            != null) cfgBits.push(`capacity=${cfg.player.capacity}`);
+    if (cfg.player?.observation_distance!= null) cfgBits.push(`obs_dist=${cfg.player.observation_distance}`);
+    if (cfg.player?.movement_duration   != null) cfgBits.push(`move_ms=${cfg.player.movement_duration}`);
+    if (cfg.parcels?.decaying_event     != null) cfgBits.push(`decay=${cfg.parcels.decaying_event}`);
+    if (cfg.parcels?.reward_avg         != null) cfgBits.push(`reward_avg=${cfg.parcels.reward_avg}`);
+    if (cfgBits.length) lines.push(`game_config: ${cfgBits.join(' ')}`);
+
+    return lines.join('\n');
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 2. TOOLS REGISTRY
 //    Ogni tool è una funzione async (args, ctx) → string (observation).
 //    ctx contiene { socket, beliefs, deps } passati a startLlmAgent.
-//    ── Per estendere a L2/L3: aggiungi qui nuovi tool e descrivili nel prompt.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function makeTools(ctx) {
@@ -66,43 +145,11 @@ function makeTools(ctx) {
             }
         },
 
-        // ── L1: posizione corrente ──────────────────────────────────────────
-        get_my_position: () =>
-            `x=${Math.round(beliefs.me.x)} y=${Math.round(beliefs.me.y)} score=${beliefs.me.score ?? '?'}`,
-
-        // ── L1/L2: informazioni sulla mappa ─────────────────────────────────
-        // Espone delivery points e bordi mappa. Indispensabile per missioni
-        // tipo "leftmost/rightmost/topmost/bottom delivery", "edge tile", ecc.
-        get_map_info: () => {
-            const dps = beliefs.deliveryPoints ?? [];
-            const xs  = [...beliefs.mapTiles.keys()].map(k => Number(k.split('_')[0]));
-            const ys  = [...beliefs.mapTiles.keys()].map(k => Number(k.split('_')[1]));
-            const bounds = xs.length
-                ? `xmin=${Math.min(...xs)} xmax=${Math.max(...xs)} ymin=${Math.min(...ys)} ymax=${Math.max(...ys)}`
-                : 'mappa non caricata';
-            const dpList = dps.length
-                ? dps.map(d => `(${d.x},${d.y})`).join(' ')
-                : 'nessuno';
-            return `bounds: ${bounds}\ndelivery_points: ${dpList}`;
-        },
-
-        // ── L1/L2: stato del carico ─────────────────────────────────────────
-        get_carrying: () => {
-            const carried = beliefs.carriedParcels ?? [];
-            if (carried.length === 0) return 'Non sto trasportando pacchi';
-            const list = carried.map(p => `${p.id}(reward=${p.reward})`).join(', ');
-            return `Trasporto ${carried.length} pacchi: ${list}`;
-        },
-
-        // ── L1/L2: pacchi visibili ──────────────────────────────────────────
-        list_parcels: () => {
-            const visible = [...(beliefs.parcels?.values() ?? [])]
-                .filter(p => !p.carriedBy)
-                .map(p => `(${Math.round(p.x)},${Math.round(p.y)}) reward=${p.reward}`);
-            return visible.length
-                ? `Pacchi liberi visibili (${visible.length}):\n${visible.join('\n')}`
-                : 'Nessun pacco libero in vista';
-        },
+        // ── Tool GENERALE di percezione ─────────────────────────────────────
+        // Espone TUTTO quello che il BDI sa nei `beliefs`. L'LLM lo legge e
+        // si arrangia: niente tool specifici per ogni tipo di missione.
+        // Restituisce uno snapshot testuale compatto ma completo.
+        inspect: () => snapshotWorld(beliefs),
 
         // ── L1: muovi verso una coordinata (usa A* o PDDL del BDI) ──────────
         navigate_to: async (input) => {
@@ -151,12 +198,11 @@ language and complete them using ONLY the available tools.
 
 Available tools:
 - calculate(expression): evaluates a math expression. e.g. "4*2"
-- get_my_position(): returns your current x, y, score
-- get_map_info(): returns map bounds (xmin/xmax/ymin/ymax) and all delivery
-  points. Use this when the mission mentions "leftmost", "rightmost",
-  "topmost", "bottom", "edge", "delivery point", "corner" etc.
-- get_carrying(): returns the parcels you are currently carrying
-- list_parcels(): returns the visible free parcels (id, position, reward)
+- inspect(): returns a snapshot of the WHOLE world state you know about:
+  your position, score, what you are carrying, map bounds, delivery points,
+  visible free parcels, visible agents, game config. Use this whenever the
+  mission references map features ("leftmost delivery", "the nearest parcel",
+  "edge tile", "where am I", "how many parcels do I carry", ...).
 - navigate_to(x,y): moves the agent to coordinate x,y
 - pickup(): picks up parcels on the current tile
 - putdown(): drops carried parcels on the current tile
@@ -179,9 +225,9 @@ Rules:
 - Never output an Action and a Final Answer in the same message.
 - Do not invent tool results. Wait for the Observation.
 - For arithmetic, ALWAYS use calculate; never compute yourself.
-- For missions that reference map features (leftmost/rightmost delivery, edges,
-  corners, "the parcel at X") ALWAYS call get_map_info / list_parcels FIRST
-  to read the actual coordinates from the world. Never guess coordinates.
+- For missions that reference world features (positions, distances, what you
+  carry, delivery points, leftmost/rightmost/edge, nearest parcel, ...) ALWAYS
+  call inspect() FIRST to read real values from the world. Never guess.
 - If navigate_to returns "irraggiungibile" twice for the SAME target, the tile
   is truly a wall: stop trying it and produce Final Answer explaining you
   could not reach the destination. Do not try random nearby tiles.

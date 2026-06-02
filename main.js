@@ -3,7 +3,12 @@ import { beliefs, updateConfig, updateMap, updateSensing } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+import fs from 'fs';
+
+// Cerca .env.bdi specifico per il BDI, altrimenti usa .env condiviso.
+const envFile = fs.existsSync('.env.bdi') ? '.env.bdi' : '.env';
+dotenv.config({ path: envFile, override: true });
+console.log(`[BDI] env caricato da ${envFile}`);
 
 // const TOKEN = process.env.TOKEN;
 // if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
