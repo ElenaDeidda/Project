@@ -70,6 +70,40 @@ function makeTools(ctx) {
         get_my_position: () =>
             `x=${Math.round(beliefs.me.x)} y=${Math.round(beliefs.me.y)} score=${beliefs.me.score ?? '?'}`,
 
+        // ── L1/L2: informazioni sulla mappa ─────────────────────────────────
+        // Espone delivery points e bordi mappa. Indispensabile per missioni
+        // tipo "leftmost/rightmost/topmost/bottom delivery", "edge tile", ecc.
+        get_map_info: () => {
+            const dps = beliefs.deliveryPoints ?? [];
+            const xs  = [...beliefs.mapTiles.keys()].map(k => Number(k.split('_')[0]));
+            const ys  = [...beliefs.mapTiles.keys()].map(k => Number(k.split('_')[1]));
+            const bounds = xs.length
+                ? `xmin=${Math.min(...xs)} xmax=${Math.max(...xs)} ymin=${Math.min(...ys)} ymax=${Math.max(...ys)}`
+                : 'mappa non caricata';
+            const dpList = dps.length
+                ? dps.map(d => `(${d.x},${d.y})`).join(' ')
+                : 'nessuno';
+            return `bounds: ${bounds}\ndelivery_points: ${dpList}`;
+        },
+
+        // ── L1/L2: stato del carico ─────────────────────────────────────────
+        get_carrying: () => {
+            const carried = beliefs.carriedParcels ?? [];
+            if (carried.length === 0) return 'Non sto trasportando pacchi';
+            const list = carried.map(p => `${p.id}(reward=${p.reward})`).join(', ');
+            return `Trasporto ${carried.length} pacchi: ${list}`;
+        },
+
+        // ── L1/L2: pacchi visibili ──────────────────────────────────────────
+        list_parcels: () => {
+            const visible = [...(beliefs.parcels?.values() ?? [])]
+                .filter(p => !p.carriedBy)
+                .map(p => `(${Math.round(p.x)},${Math.round(p.y)}) reward=${p.reward}`);
+            return visible.length
+                ? `Pacchi liberi visibili (${visible.length}):\n${visible.join('\n')}`
+                : 'Nessun pacco libero in vista';
+        },
+
         // ── L1: muovi verso una coordinata (usa A* o PDDL del BDI) ──────────
         navigate_to: async (input) => {
             const m = String(input).match(/(\d+)\s*,\s*(\d+)/);
@@ -118,6 +152,11 @@ language and complete them using ONLY the available tools.
 Available tools:
 - calculate(expression): evaluates a math expression. e.g. "4*2"
 - get_my_position(): returns your current x, y, score
+- get_map_info(): returns map bounds (xmin/xmax/ymin/ymax) and all delivery
+  points. Use this when the mission mentions "leftmost", "rightmost",
+  "topmost", "bottom", "edge", "delivery point", "corner" etc.
+- get_carrying(): returns the parcels you are currently carrying
+- list_parcels(): returns the visible free parcels (id, position, reward)
 - navigate_to(x,y): moves the agent to coordinate x,y
 - pickup(): picks up parcels on the current tile
 - putdown(): drops carried parcels on the current tile
@@ -140,6 +179,12 @@ Rules:
 - Never output an Action and a Final Answer in the same message.
 - Do not invent tool results. Wait for the Observation.
 - For arithmetic, ALWAYS use calculate; never compute yourself.
+- For missions that reference map features (leftmost/rightmost delivery, edges,
+  corners, "the parcel at X") ALWAYS call get_map_info / list_parcels FIRST
+  to read the actual coordinates from the world. Never guess coordinates.
+- If navigate_to returns "irraggiungibile" twice for the SAME target, the tile
+  is truly a wall: stop trying it and produce Final Answer explaining you
+  could not reach the destination. Do not try random nearby tiles.
 
 MISSION TYPES — IMPORTANT:
 The server gives points ONLY when the result is delivered back. There are two
