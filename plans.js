@@ -11,7 +11,7 @@ class PlanBase {
     stop()           { this.#stopped = true; }
 }
 
-/*export class GoPickUp extends PlanBase {
+export class GoPickUp extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
     static isApplicableTo(action) { return action === 'go_pick_up'; }
@@ -47,9 +47,7 @@ class PlanBase {
         return true;
     }
 }
-*/
-
-
+/*
 export class GoPickUp extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
@@ -143,7 +141,7 @@ export class GoPickUp extends PlanBase {
         return true;
     }
 }
-
+*/
 export class Deliver extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
