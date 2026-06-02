@@ -79,39 +79,48 @@ function evalSafe(expr) {
 
 
 /**
- * Verdetto principale: la missione conviene?
+ * Verdetto principale: la missione conviene? E quanto?
+ * - `worth`    : false → scartare (trappole, missioni inutilmente costose)
+ * - `priority` : numero, più alto = più importante. Usato dalla mission_queue
+ *                per scegliere tra missioni concorrenti.
  * @param {string} missionText
  * @param {object} beliefs   beliefs dell'agente (per posizione/distanze)
- * @returns {{worth:boolean, reward:number|null, cost:number, reason:string}}
+ * @returns {{worth:boolean, priority:number, reward:number|null, cost:number, reason:string}}
  */
 export function evaluateMission(missionText, beliefs) {
     const reward = extractReward(missionText);
     const cost   = estimateCost(missionText, beliefs);
 
-    // 1. Reward negativo o zero → TRAPPOLA, ignora sempre
+    // 1. Trappola (reward esplicito ≤ 0) → mai eseguita
     if (reward !== null && reward <= 0) {
-        return { worth: false, reward, cost, reason: 'reward negativo/nullo (trappola)' };
+        return { worth: false, priority: 0, reward, cost,
+                 reason: 'reward negativo/nullo (trappola)' };
     }
 
-    // 2. Missione "domanda" (calcolo, capitale, ...) → costo zero, sempre conviene
+    // 2. Missione informativa (no reward, no target) → costo 0
+    //    Priorità BASSA: l'agente la esegue solo se non c'è di meglio in coda.
     if (cost === 0 && reward === null) {
-        return { worth: true, reward, cost, reason: 'missione informativa, costo nullo' };
+        return { worth: true, priority: 0.5, reward, cost,
+                 reason: 'missione informativa, costo nullo' };
     }
 
-    // 3. Reward non dichiarato ma c'è un costo → tentativo cauto (conviene se vicino)
+    // 3. Reward ignoto ma c'è un costo → tentativo cauto
     if (reward === null) {
         const worth = cost <= 10;
-        return { worth, reward, cost,
-                 reason: worth ? 'reward ignoto ma target vicino' : 'reward ignoto e target lontano' };
+        return { worth, priority: worth ? 1.0 : 0, reward, cost,
+                 reason: worth ? 'reward ignoto ma target vicino'
+                               : 'reward ignoto e target lontano' };
     }
 
-    // 4. Calcolo costi/benefici: passi-per-punto sotto la soglia?
+    // 4. Reward noto: priority = reward / (cost+1). Più punti per passo = meglio.
+    //    Esempio: 500pt in 5 passi = 83.3; 10pt in 2 passi = 3.3; 10pt in 20 passi = 0.5
     const stepsPerPoint = cost / reward;
-    const worth = stepsPerPoint <= STEPS_PER_POINT_THRESHOLD;
+    const worth    = stepsPerPoint <= STEPS_PER_POINT_THRESHOLD;
+    const priority = worth ? reward / (cost + 1) : 0;
     return {
-        worth, reward, cost,
+        worth, priority, reward, cost,
         reason: worth
-            ? `conviene (${cost} passi per ${reward}pt)`
+            ? `${reward}pt in ${cost} passi (pri=${priority.toFixed(2)})`
             : `troppo costosa (${cost} passi per ${reward}pt)`,
     };
 }
