@@ -18,9 +18,7 @@ export class IntentionRevision {
         const key = _predicateKey(predicate);
         if (this.#isRunning && key === this.#currentKey) return;
 
-        if (this.#isRunning && key !== this.#currentKey)
-            // console.log(`[INTENTIONS] CAMBIO: ${this.#currentKey} → ${key}`);
-        
+        // (log rimosso) sostituzione di intenzione: ferma quella corrente
         this.#current?.stop();
 
         const intention  = new IntentionDeliberation(predicate, this.#socket);
