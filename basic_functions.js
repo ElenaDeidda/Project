@@ -142,5 +142,6 @@ export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0, myDi
             break;
         }
     }
-    // console.log(`[scoreParcel] parcel ${parcel.id} (${parcel.x},${parcel.y}) reward=${reward} banked=${bankedReward.toFixed(1)}: score=${score.toFixed(2)} (myDist=${myDist}, delDist=${deliveryDist})`);    return score;
+    // console.log(`[scoreParcel] parcel ${parcel.id} (${parcel.x},${parcel.y}) reward=${reward} banked=${bankedReward.toFixed(1)}: score=${score.toFixed(2)} (myDist=${myDist}, delDist=${deliveryDist})`);
+    return score;
 };
