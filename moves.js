@@ -169,7 +169,7 @@ async function opportunisticActions(me, socket) {
             beliefs.carrying       = true;
             beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
             for (const pp of picked) beliefs.parcels.delete(pp.id);
-            console.log(`[MOVES] pickup opportunistico: ${picked.length} pacchi @ (${x},${y})`);
+            // console.log(`[MOVES] pickup opportunistico: ${picked.length} pacchi @ (${x},${y})`);
         }
         break;
     }
@@ -183,7 +183,7 @@ async function opportunisticActions(me, socket) {
             if (dropped && dropped.length > 0) {
                 beliefs.carrying       = false;
                 beliefs.carriedParcels = [];
-                console.log(`[MOVES] delivery opportunistica: ${dropped.length} pacchi @ (${x},${y})`);
+                // console.log(`[MOVES] delivery opportunistica: ${dropped.length} pacchi @ (${x},${y})`);
             }
         }
     }
@@ -198,7 +198,7 @@ export async function navigateTo(
     shouldStop  = () => false,
     retryLimit  = 3,
 ) {
-    console.log(`[MOVES] navigateTo A*: (${Math.round(me.x)},${Math.round(me.y)}) → (${target.x},${target.y})`);
+    // console.log(`[MOVES] navigateTo A*: (${Math.round(me.x)},${Math.round(me.y)}) → (${target.x},${target.y})`);
 
     for (let attempt = 0; attempt < retryLimit; attempt++) {
 
@@ -208,23 +208,23 @@ export async function navigateTo(
         const path = aStarPath(me, target, walkableTiles, blocked, isDirectional);
 
         if (path === null) {
-            console.warn(`[MOVES] A*: target (${target.x},${target.y}) non raggiungibile`);
+            // console.warn(`[MOVES] A*: target (${target.x},${target.y}) non raggiungibile`);
             return 'failed';
         }
 
         if (path.length === 0) {
-            console.log(`[MOVES] A*: già a destinazione`);
+            // console.log(`[MOVES] A*: già a destinazione`);
             return 'reached';
         }
 
-        console.log(`[MOVES] A* (tentativo ${attempt + 1}): percorso di ${path.length} passi`);
+        // console.log(`[MOVES] A* (tentativo ${attempt + 1}): percorso di ${path.length} passi`);
 
         let pathBroken = false;
 
         for (const nextCell of path) {
 
             if (shouldStop()) {
-                console.log(`[MOVES] navigateTo interrotto da shouldStop()`);
+                // console.log(`[MOVES] navigateTo interrotto da shouldStop()`);
                 return 'stopped';
             }
 
@@ -238,7 +238,7 @@ export async function navigateTo(
                 me.y = result.y;
                 await opportunisticActions(me, socket);
             } else {
-                console.warn(`[MOVES] Passo verso ${direction} rifiutato — ricalcolo A* (tentativo ${attempt + 1})`);
+                // console.warn(`[MOVES] Passo verso ${direction} rifiutato — ricalcolo A* (tentativo ${attempt + 1})`);
                 pathBroken = true;
                 break;
             }
@@ -251,6 +251,6 @@ export async function navigateTo(
         }
     }
 
-    console.warn(`[MOVES] navigateTo: esauriti ${retryLimit} tentativi A*`);
+    // console.warn(`[MOVES] navigateTo: esauriti ${retryLimit} tentativi A*`);
     return 'failed';
 }

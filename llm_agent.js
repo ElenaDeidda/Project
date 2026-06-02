@@ -29,7 +29,7 @@ const apiKey  = process.env.LITELLM_API_KEY;
 const MODEL   = process.env.LOCAL_MODEL || 'llama-3.3-70b-lmstudio';
 
 if (!apiKey) {
-    console.error('[LLM] Manca LITELLM_API_KEY nel .env');
+    // console.error('[LLM] Manca LITELLM_API_KEY nel .env');
     process.exit(1);
 }
 
@@ -94,7 +94,7 @@ function makeTools(ctx) {
         answer: (input) => {
             // La missione dice "send the answer to the agent who sent the prompt"
             broadcast('mission_answer', { answer: String(input) });
-            console.log(`[LLM] Risposta inviata: ${input}`);
+            // console.log(`[LLM] Risposta inviata: ${input}`);
             return `Risposta inviata: ${input}`;
         },
 
@@ -181,7 +181,7 @@ async function runMission(missionText, ctx) {
 
         const final = extractFinal(out);
         if (final) {
-            console.log(`[LLM] ✅ Missione completata: ${final}`);
+            // console.log(`[LLM] ✅ Missione completata: ${final}`);
             return final;
         }
 
@@ -203,11 +203,11 @@ async function runMission(missionText, ctx) {
             }
         }
 
-        console.log(`[LLM] ${act.action}(${act.input}) → ${observation}`);
+        // console.log(`[LLM] ${act.action}(${act.input}) → ${observation}`);
         messages.push({ role: 'user', content: `Observation: ${observation}` });
     }
 
-    console.warn('[LLM] Limite iterazioni raggiunto senza Final Answer');
+    // console.warn('[LLM] Limite iterazioni raggiunto senza Final Answer');
     return null;
 }
 
@@ -232,16 +232,16 @@ export function startLlmAgent(socket, beliefs, deps) {
         const text = typeof msg === 'string' ? msg : msg?.mission;
         if (!text) return;
 
-        console.log(`[LLM] 📩 Special mission ricevuta: "${text}"`);
+        // console.log(`[LLM] 📩 Special mission ricevuta: "${text}"`);
 
         // 1. VALUTA se conviene
         const verdict = evaluateMission(text, beliefs);
-        console.log(`[LLM] Valutazione: ${verdict.reason} → ${verdict.worth ? 'ESEGUO' : 'IGNORO'}`);
+        // console.log(`[LLM] Valutazione: ${verdict.reason} → ${verdict.worth ? 'ESEGUO' : 'IGNORO'}`);
         if (!verdict.worth) return;
 
         // 2. ESEGUI con il loop ReAct
         await runMission(text, ctx);
     });
 
-    console.log('[LLM] Agente LLM avviato — in ascolto di special missions');
+    // console.log('[LLM] Agente LLM avviato — in ascolto di special missions');
 }

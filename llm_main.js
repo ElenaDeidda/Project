@@ -16,6 +16,5 @@ socket.onYou(me => {
     beliefs.me.score = me.score;
 });
 socket.onSensing(s => updateSensing(s));
-s
 // 3. Avvia l'agente LLM
 startLlmAgent(socket, beliefs, { navigateTo });

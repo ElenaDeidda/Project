@@ -19,7 +19,7 @@ export class IntentionRevision {
         if (this.#isRunning && key === this.#currentKey) return;
 
         if (this.#isRunning && key !== this.#currentKey)
-            console.log(`[INTENTIONS] CAMBIO: ${this.#currentKey} → ${key}`);
+            // console.log(`[INTENTIONS] CAMBIO: ${this.#currentKey} → ${key}`);
         
         this.#current?.stop();
 
@@ -31,12 +31,12 @@ export class IntentionRevision {
         this.#chain = this.#chain.then(async () => {
             if (this.#current !== intention) return;
 
-            console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
+            // console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
             try {
                 await intention.achieve();
             } catch (err) {
                 if (!Array.isArray(err) || err[0] !== 'stopped')
-                    console.warn(`[INTENTIONS] Fallita [${predicate[0]}]:`, err);
+                     console.warn(`[INTENTIONS] Fallita [${predicate[0]}]:`, err);
             } finally {
                 if (this.#current === intention) {
                     this.#isRunning  = false;
@@ -78,7 +78,7 @@ class IntentionDeliberation {
                 return await this.#currentPlan.execute(...this.#predicate);
             } catch (err) {
                 if (Array.isArray(err) && err[0] === 'stopped') throw err;
-                console.warn(`[INTENTIONS] Piano ${PlanClass.name} fallito:`, err);
+                // console.warn(`[INTENTIONS] Piano ${PlanClass.name} fallito:`, err);
             }
         }
         throw [`Nessun piano per`, ...this.#predicate];
