@@ -30,7 +30,7 @@ export function updateMap(width, height, tiles) {
         beliefs.mapTiles.set(key, { type: String(tile.type) });
         if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
         if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
-        console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
+        //console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
         
     }
 
@@ -50,10 +50,10 @@ export function updateMap(width, height, tiles) {
         }
 
         beliefs.spawnVisibility.set(key, count);
-        console.log(`[BELIEFS] spawnVisibility (${x},${y}) = ${count}`);
+        //console.log(`[BELIEFS] spawnVisibility (${x},${y}) = ${count}`);
     }
 
-    console.log(`[BELIEFS] spawnVisibility calcolata per ${beliefs.spawnVisibility.size} spawn tiles`);
+    //console.log(`[BELIEFS] spawnVisibility calcolata per ${beliefs.spawnVisibility.size} spawn tiles`);
 }
 
 export function updateSensing(sensing) {
@@ -98,14 +98,14 @@ export function updateSensing(sensing) {
 
     }
 
-    console.log(`[updateSensing] parcels visibili:`, seen.size, `| in memoria:`, beliefs.parcels.size - seen.size);
+    //console.log(`[updateSensing] parcels visibili:`, seen.size, `| in memoria:`, beliefs.parcels.size - seen.size);
     // console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
 
     const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
     beliefs.carrying       = mine.length > 0;
     beliefs.carriedParcels = mine;
     // console.log(`[updateSensing] carrying:`, beliefs.carrying);
-    console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
+    //console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
 
     updateAgents(sensing.agents ?? []);
 }
@@ -137,10 +137,10 @@ export function updateAgents(agents) {
             targetX, targetY,
         });
 
-        console.log(`[updateAgents] "${a.name}" (${a.id}) @ (${a.x},${a.y}) moving:${moving} dir:${direction} → target:(${targetX},${targetY})`);
+        //console.log(`[updateAgents] "${a.name}" (${a.id}) @ (${a.x},${a.y}) moving:${moving} dir:${direction} → target:(${targetX},${targetY})`);
     }
 
-    console.log(`[updateAgents] agenti tracciati:`, beliefs.agents.size);
+    //console.log(`[updateAgents] agenti tracciati:`, beliefs.agents.size);
 }
 
 export function getBlockedCells() {
@@ -149,7 +149,7 @@ export function getBlockedCells() {
         blocked.add(`${Math.round(a.x)}_${Math.round(a.y)}`);
         blocked.add(`${a.targetX}_${a.targetY}`);
     }
-    console.log(`[getBlockedCells] celle bloccate:`, blocked.size);
+    //console.log(`[getBlockedCells] celle bloccate:`, blocked.size);
     return blocked;
 }
 
@@ -159,6 +159,6 @@ export function getAgentPositions() {
         out.push({ x: Math.round(a.x), y: Math.round(a.y) });
         if (a.moving) out.push({ x: a.targetX, y: a.targetY });
     }
-    console.log(`[getAgentPositions] posizioni note:`, out);
+    //console.log(`[getAgentPositions] posizioni note:`, out);
     return out;
 }

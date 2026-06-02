@@ -8,12 +8,10 @@ dotenv.config({ override: true });
 // const TOKEN = process.env.TOKEN;
 // if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
 // const HOST  = "https://deliveroojs.bears.disi.unitn.it/";
-    const HOST = process.env.HOST;
-    const TOKEN = process.env.TOKEN;
+const HOST = process.env.HOST;
+const TOKEN = process.env.TOKEN;
 
-    const socket = DjsConnect(HOST, TOKEN);
-// const socket = DjsConnect('localhost:8080', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjdhODFmZSIsIm5hbWUiOiJsYXJhIiwicm9sZSI6InVzZXIiLCJpYXQiOjE3Nzk2MzYwNDB9.MBUK5aw0LN756lhEqOZgfRfJKdHxHBNEIcqDpa97s3s');
-
+const socket = DjsConnect(HOST, TOKEN);
 const agent = new IntentionRevision(socket);
 
 // --- Listener SDK ---
@@ -112,8 +110,8 @@ const mapReady = new Promise(res => socket.once('map', (w, h, t) => res({ width:
 await meReady;
 const { width, height } = await mapReady;
 
-console.log(`Connesso Agente ${beliefs.me.name} con id = ${beliefs.me.id}, @ (${beliefs.me.x},${beliefs.me.y})`);
-console.log(`Mappa: ${width}x${height} | Delivery points: ${beliefs.deliveryPoints.length}`);
+// console.log(`Connesso Agente ${beliefs.me.name} con id = ${beliefs.me.id}, @ (${beliefs.me.x},${beliefs.me.y})`);
+// console.log(`Mappa: ${width}x${height} | Delivery points: ${beliefs.deliveryPoints.length}`);
 
 // Registra sensing DOPO che beliefs.me.id è garantito impostato da onYou
 socket.onSensing( (s) => {
