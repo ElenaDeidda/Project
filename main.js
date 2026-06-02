@@ -57,12 +57,14 @@ beliefs.mapTiles viene poi usata in navigateTo (in moves.js) per sapere quali ce
 beliefs.deliveryPoints viene usata da options.js per scegliere il delivery point più vicino.
 */
 
-socket.onYou( ({id, name, x, y, score}) => {
-    beliefs.me.id = id; 
-    beliefs.me.name = name;
-    beliefs.me.x = x;  
-    beliefs.me.y = y;  
-    beliefs.me.score = score;
+socket.onYou( ({id, name, teamId, teamName, x, y, score}) => {
+    beliefs.me.id       = id;
+    beliefs.me.name     = name;
+    beliefs.me.teamId   = teamId;
+    beliefs.me.teamName = teamName;
+    beliefs.me.x        = x;
+    beliefs.me.y        = y;
+    beliefs.me.score    = score;
 });
 
 /*sensing = {

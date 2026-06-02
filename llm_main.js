@@ -10,11 +10,19 @@ const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
 
 // 2. Aggiorna i beliefs col sensing (serve all'LLM per sapere dove si trova)
 socket.onYou(me => {
-    beliefs.me.x = me.x;
-    beliefs.me.y = me.y;
-    beliefs.me.id = me.id;
-    beliefs.me.score = me.score;
+    beliefs.me.id       = me.id;
+    beliefs.me.name     = me.name;
+    beliefs.me.teamId   = me.teamId;
+    beliefs.me.teamName = me.teamName;
+    beliefs.me.x        = me.x;
+    beliefs.me.y        = me.y;
+    beliefs.me.score    = me.score;
 });
 socket.onSensing(s => updateSensing(s));
-// 3. Avvia l'agente LLM
+
+// 3. Aspetta che il server mandi 'you' (con teamId) prima di avviare l'LLM:
+//    initComms() ha bisogno di beliefs.me.teamId per filtrare i messaggi del team.
+await new Promise(res => socket.once('you', res));
+
+// 4. Avvia l'agente LLM
 startLlmAgent(socket, beliefs, { navigateTo });
