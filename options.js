@@ -104,7 +104,7 @@ function resetCollection() {
     // un po' di più: alza N (adattamento bidirezionale).
     if (deliverReason === 'threshold' && N_current !== null) {
         N_current = clamp(N_current + N_INCREASE_STEP, N_MIN, capacityCap());
-        // console.log(`[OPTIONS] Consegna pulita → N = ${N_current.toFixed(1)}`);
+        console.log(`[OPTIONS] Consegna pulita → N = ${N_current.toFixed(1)}`);
     }
     batchPeak        = 0;
     lastPickupTime   = null;
@@ -124,7 +124,7 @@ function shouldDeliver() {
     // Inizializzazione una-tantum di N dalla config
     if (N_current === null) {
         N_current = computeInitialN();
-        // console.log(`[OPTIONS] N iniziale = ${N_current.toFixed(1)}`);
+        console.log(`[OPTIONS] N iniziale = ${N_current.toFixed(1)}`);
     }
 
     if (deliverLatch) return true;
@@ -144,7 +144,7 @@ function shouldDeliver() {
 
     // 1. Capacità piena → consegna (pulita)
     if (count >= capacity) {
-        // console.log(`[OPTIONS] Capacità piena → consegna`);
+        console.log(`[OPTIONS] Capacità piena → consegna`);
         deliverReason = 'threshold';
         return (deliverLatch = true);
     }
@@ -152,7 +152,7 @@ function shouldDeliver() {
     // 2. Trigger: troppo tempo senza raccogliere nuovi pacchi → consegna + abbassa N
     if (now - lastPickupTime > NO_PICKUP_TIMEOUT) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        // console.log(`[OPTIONS] ${NO_PICKUP_TIMEOUT}ms senza pickup → consegna, N = ${N_current.toFixed(1)}`);
+        console.log(`[OPTIONS] ${NO_PICKUP_TIMEOUT}ms senza pickup → consegna, N = ${N_current.toFixed(1)}`);
         deliverReason = 'trigger';
         return (deliverLatch = true);
     }
@@ -160,7 +160,7 @@ function shouldDeliver() {
     // 3. Trigger: valore decaduto sotto soglia rispetto al picco → consegna + abbassa N
     if (batchPeak > 0 && value < batchPeak * DECAY_THRESHOLD) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        // console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna, N = ${N_current.toFixed(1)}`);
+        console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna, N = ${N_current.toFixed(1)}`);
         deliverReason = 'trigger';
         return (deliverLatch = true);
     }
@@ -178,8 +178,8 @@ function shouldDeliver() {
         // 'opportunistic' = consegna anticipata perché il delivery è a portata:
         // NON deve influenzare l'adattamento di N (né su né giù).
         deliverReason = (nearDelivery && effN < N_current) ? 'opportunistic' : 'threshold';
-        // console.log(`[OPTIONS] Soglia${nearDelivery ? ` (delivery a dist ${delDist} ≤ ${obsDist})` : ''}: ` +
-        //             `${value.toFixed(0)} ≥ ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) → consegna`);
+        console.log(`[OPTIONS] Soglia${nearDelivery ? ` (delivery a dist ${delDist} ≤ ${obsDist})` : ''}: ` +
+                `${value.toFixed(0)} ≥ ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) → consegna`);
         return (deliverLatch = true);
     }
 
@@ -274,8 +274,8 @@ function buildSpawnOptions(agentPositions, dist) {
         const waited = ((now - lastPickupSeenTime) / 1000).toFixed(1);
         exhaustedZones.set(`${cx}_${cy}`, now + patrolTimeout() * EXHAUST_COOLDOWN_FACTOR);
         lastPickupSeenTime = now;
-        // console.log(`[PATROL] Zona (${cx},${cy}) esausta dopo ${waited}s senza pacchi ` +
-        //             `(timeout ${(patrolTimeout() / 1000).toFixed(1)}s) → rilocazione | zone esauste: ${exhaustedZones.size}`);
+        console.log(`[PATROL] Zona (${cx},${cy}) esausta dopo ${waited}s senza pacchi ` +
+                     `(timeout ${(patrolTimeout() / 1000).toFixed(1)}s) → rilocazione | zone esauste: ${exhaustedZones.size}`);
     }
 
     const exhaustCenters = [...exhaustedZones.keys()].map(k => {
