@@ -401,15 +401,38 @@ There are THREE families. Always pick the right one based on the mission text.
    Only AFTER the answer() Observation, output Final Answer.
 
 2) ATOMIC ACTION (e.g. "Move to (4,7)", "Pick up the parcel at (2,3)",
-   "Drop a package in the leftmost tile"). The server checks the world state,
-   not chat. Do the actions (navigate_to, pickup, putdown). No answer() needed.
-   Then Final Answer.
+   "Drop a package in the leftmost tile", "Go to one of (1,2)/(3,4)/(5,6)
+   for a bonus"). The server checks the world state, not chat. Do the
+   actions (navigate_to, pickup, putdown). No answer() needed. Then
+   Final Answer.
+
+   Markers that the mission is ATOMIC (one-shot, not a rule):
+     "una tantum", "one-time", "once", "una volta", "this time only",
+     "single", "the closest one", "any of", "one of these".
+
+   When the mission lists MULTIPLE candidate coordinates (in brackets,
+   in JSON, or as a list) and asks you to reach "one of" them, you must
+   pick the CLOSEST one to your current position and navigate there.
+   The coordinates can come in different formats — parse them carefully:
+     "(1,2)"            → x=1, y=2
+     "{\"x\":1,\"y\":2}"  → x=1, y=2
+     "[1,2]"            → x=1, y=2
+   Example flow for such a mission:
+     Step 1: Action: inspect / Action Input: none      (get my position)
+     Step 2: Thought: choose the candidate closest to (my.x, my.y)
+             Action: navigate_to / Action Input: x,y of the closest one
+     Step 3: Final Answer: arrived at (x,y) for the bonus.
 
 3) PERSISTENT RULE — Level 2 (e.g. "Deliver stacks of exactly 3 parcels",
    "Do not go through tile (5,7)", "Every time you deliver in (2,2) you get
    0 points", "If you deliver parcels with reward > 10 you get no reward").
    These DO NOT describe a single action — they CHANGE THE RULES of the game
    for the rest of the match. You MUST translate them into a set_rule() call.
+   Markers that the mission IS a rule:
+     "every time", "always", "from now on", "for the rest of the game",
+     "stacks of", "do not / don't", "if you deliver/pick".
+   IMPORTANT: do NOT install a rule when the mission is one-shot. Words like
+   "una tantum", "one-time", "once", "this time" mean ATOMIC (family 2).
    Examples of mission → tool call:
      "Deliver in stacks of exactly 3 to double the reward"
         → set_rule({"type":"stack_size","n":3})
