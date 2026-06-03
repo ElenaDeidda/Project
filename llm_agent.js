@@ -232,7 +232,7 @@ export function startLlmAgent(socket, beliefs, deps) {
         const text = typeof msg === 'string' ? msg : msg?.mission;
         if (!text) return;
 
-        // console.log(`[LLM] 📩 Special mission ricevuta: "${text}"`);
+        // console.log(`[LLM]  Special mission ricevuta: "${text}"`);
 
         // 1. VALUTA se conviene
         const verdict = evaluateMission(text, beliefs);
