@@ -96,18 +96,62 @@ function applyRulesToBeliefs() {
     }
 }
 
+// Trova il pacco libero più vicino visibile. Null se non ce ne sono.
+function nearestFreeParcel(beliefs) {
+    const free = [...(beliefs.parcels?.values() ?? [])].filter(p => !p.carriedBy);
+    if (free.length === 0) return null;
+    free.sort((a, b) =>
+        (Math.abs(a.x - beliefs.me.x) + Math.abs(a.y - beliefs.me.y)) -
+        (Math.abs(b.x - beliefs.me.x) + Math.abs(b.y - beliefs.me.y)));
+    return free[0];
+}
+
+// Sceglie una spawn tile sensata: alta visibilità, e vicina a me.
+function bestSpawnTile(beliefs) {
+    const spawnVis = beliefs.spawnVisibility ?? new Map();
+    if (spawnVis.size === 0) return null;
+    const me = beliefs.me;
+    let best = null, bestScore = -Infinity;
+    for (const [key, vis] of spawnVis.entries()) {
+        const [x, y] = key.split('_').map(Number);
+        const dist = Math.abs(x - me.x) + Math.abs(y - me.y);
+        const score = vis * 10 - dist;     // visibilità prima, distanza poi
+        if (score > bestScore) { best = { x, y }; bestScore = score; }
+    }
+    return best;
+}
+
+// Quando una regola blocca il 'deliver', l'agente DEVE comunque fare qualcosa
+// di utile: cerca un pacco da raccogliere; se non ne vede, vai su una spawn
+// tile (con coordinate reali, sennò GoToSpawn fa solo sleep e l'agente si
+// pianta).
+function redirectAwayFromDeliver(beliefs) {
+    const p = nearestFreeParcel(beliefs);
+    if (p) {
+        return ['go_pick_up', Math.round(p.x), Math.round(p.y), p.id, p.reward];
+    }
+    const s = bestSpawnTile(beliefs);
+    if (s) return ['go_to_spawn', s.x, s.y];
+    return ['go_to_spawn'];   // fallback solo se proprio non c'è altro
+}
+
 function applyRulesToPredicate(predicate) {
     if (!predicate) return predicate;
     const [action, ...args] = predicate;
 
-    // stack_size: il BDI vuole consegnare ma porto meno (o più) di N → forzo
-    // a continuare a raccogliere finché non ne ho esattamente N.
+    // stack_size: il BDI vuole consegnare ma porto meno di N → reindirizzo
+    // verso un pickup utile (o una spawn tile vera) per arrivare a N.
+    // Se porto > N, lascio passare la consegna (meglio consegnare che impalarsi).
     if (Number.isInteger(activeRules.stackSize) && action === 'deliver') {
         const N = activeRules.stackSize;
         const carried = beliefs.carriedParcels?.length ?? 0;
-        if (carried !== N) {
-            console.log(`[RULES] stackSize=${N}: porto ${carried} → rimando consegna`);
-            return ['go_to_spawn'];
+        if (carried < N) {
+            const alt = redirectAwayFromDeliver(beliefs);
+            console.log(`[RULES] stackSize=${N}: porto ${carried} → ${alt[0]}(${alt.slice(1).join(',')})`);
+            return alt;
+        }
+        if (carried > N) {
+            console.log(`[RULES] stackSize=${N}: porto ${carried} (più del target) → consegno comunque`);
         }
     }
 
@@ -120,8 +164,8 @@ function applyRulesToPredicate(predicate) {
                 d => !activeRules.zeroDeliveries.some(t => t.x === d.x && t.y === d.y)
             );
             if (alts.length === 0) {
-                console.log(`[RULES] zeroDelivery: nessuna delivery permessa → go_to_spawn`);
-                return ['go_to_spawn'];
+                console.log(`[RULES] zeroDelivery: nessuna delivery permessa → redirect`);
+                return redirectAwayFromDeliver(beliefs);
             }
             alts.sort((a, b) =>
                 (Math.abs(a.x-beliefs.me.x)+Math.abs(a.y-beliefs.me.y)) -
