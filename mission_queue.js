@@ -175,13 +175,16 @@ function runOne(mission) {
     const controller = new AbortController();
     _running = { ...mission, controller };
 
-    console.log(`[QUEUE] eseguo "${mission.text}" (pri=${mission.priority.toFixed(2)})`);
+    const startedAt = Date.now();
+    console.log(`[QUEUE] ▶ START "${mission.text}" (pri=${mission.priority.toFixed(2)}) — coda restante: ${_queue.length}`);
     _bdiPause();   // silenzia il loop BDI dell'LLM agent durante la mission
 
     Promise.resolve()
         .then(() => _runMissionFn(mission.text, mission.senderId, controller.signal))
-        .catch(err => console.warn(`[QUEUE] errore esecuzione: ${err?.message ?? err}`))
+        .catch(err => console.warn(`[QUEUE] ⚠ errore esecuzione: ${err?.message ?? err}`))
         .finally(() => {
+            const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+            console.log(`[QUEUE] ■ END   "${mission.text}" — durata ${elapsed}s — coda restante: ${_queue.length}`);
             _running = null;
             _bdiResume();   // il BDI riprende a giocare normalmente
         });
