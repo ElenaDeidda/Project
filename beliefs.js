@@ -1,0 +1,164 @@
+// beliefs.js — Stato del mondo e funzioni di aggiornamento
+import { smartDist, parseIntervalMs } from './basic_functions.js';
+
+export const beliefs = {
+    me:             { id: '', name: '', teamId: '', teamName: '', x: 0, y: 0, score: 0 },
+    config:         {},
+    mapTiles:       new Map(),
+    isDirectionalMap: false,
+    deliveryPoints: [],
+    parcels:        new Map(),
+    agents:         new Map(),   // id → { x, y, moving, direction, targetX, targetY }
+    carrying:       false,
+    carriedParcels: [],
+
+    // Precalcolato in updateMap():
+    // per ogni spawn tile "x_y" → quante spawn tiles sono visibili da quel punto
+    spawnVisibility: new Map(),
+
+};
+
+export function updateConfig(config) {
+    beliefs.config = config;
+}
+
+export function updateMap(width, height, tiles) {
+    // --- 1. Costruisce mapTiles e deliveryPoints ---
+    const ARROW_TYPES = new Set(['→', '←', '↑', '↓']);
+    for (const tile of tiles) {
+        const key = `${tile.x}_${tile.y}`;
+        beliefs.mapTiles.set(key, { type: String(tile.type) });
+        if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
+        if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
+        //console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
+        
+    }
+
+    // --- 2. Precalcola spawnVisibility ---
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+
+    for (const [key, tile] of beliefs.mapTiles.entries()) {
+        if (tile.type != '1') continue;
+
+        const [x, y] = key.split('_').map(Number);
+        let count = 0;
+
+        for (const [k2, t2] of beliefs.mapTiles.entries()) {
+            if (t2.type != '1') continue;
+            const [sx, sy] = k2.split('_').map(Number);
+            if (Math.abs(sx - x) + Math.abs(sy - y) < obsDist) count++;
+        }
+
+        beliefs.spawnVisibility.set(key, count);
+        //console.log(`[BELIEFS] spawnVisibility (${x},${y}) = ${count}`);
+    }
+
+    //console.log(`[BELIEFS] spawnVisibility calcolata per ${beliefs.spawnVisibility.size} spawn tiles`);
+}
+
+export function updateSensing(sensing) {
+    const now    = Date.now();
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+    const decayMs = parseIntervalMs(beliefs.config.GAME?.parcels?.decaying_event);
+
+    // --- 1. Aggiorna/inserisce i pacchi visti ORA ---
+    const seen = new Set();
+    for (const p of sensing.parcels) {
+        // Pacco in mano a un avversario: rimuovilo dalla memoria
+        if (p.carriedBy && p.carriedBy !== beliefs.me.id) {
+            beliefs.parcels.delete(p.id);
+            continue;
+        }
+        seen.add(p.id);
+        beliefs.parcels.set(p.id, {
+            id: p.id, x: p.x, y: p.y,
+            reward: p.reward, carriedBy: p.carriedBy ?? null,
+            lastDecay: now,            // ultimo istante in cui ho scontato il decay
+        });
+    }
+
+    // --- 2. Riconcilia i pacchi NON visti in questo tick (memoria) ---
+    // Senza questo passo un pacco che esce dalla vista sparirebbe subito,
+    // facendo perdere il commitment all'agente → oscillazione tra due target.
+    for (const [id, p] of beliefs.parcels) {
+        if (seen.has(id)) continue;
+
+        // Se è dentro il raggio di osservazione ma non lo vediamo → preso/scaduto
+        if (smartDist(beliefs.me, p) < obsDist) {
+            beliefs.parcels.delete(id);
+            continue;
+        }
+
+        // Fuori vista: scontiamo il reward per il decay maturato dall'ultimo conteggio
+        if (Number.isFinite(decayMs)) {
+            p.reward  -= (now - p.lastDecay) / decayMs;
+            p.lastDecay = now;
+            if (p.reward <= 0) beliefs.parcels.delete(id)
+        }
+
+    }
+
+    //console.log(`[updateSensing] parcels visibili:`, seen.size, `| in memoria:`, beliefs.parcels.size - seen.size);
+    // console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
+
+    const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
+    beliefs.carrying       = mine.length > 0;
+    beliefs.carriedParcels = mine;
+    // console.log(`[updateSensing] carrying:`, beliefs.carrying);
+    //console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
+
+    updateAgents(sensing.agents ?? []);
+}
+
+export function updateAgents(agents) {
+    beliefs.agents.clear();
+
+    for (const a of agents) {
+        if (a.x == null || a.y == null) continue;
+
+        const fracX = a.x % 1;
+        const fracY = a.y % 1;
+        const moving = fracX !== 0 || fracY !== 0;
+
+        let direction = 'none';
+        let targetX   = Math.round(a.x);
+        let targetY   = Math.round(a.y);
+
+        if (moving) {
+            if (fracX > 0.5)       { direction = 'right'; targetX = Math.floor(a.x) + 1; }
+            else if (fracX > 0)    { direction = 'left';  targetX = Math.floor(a.x);     }
+            else if (fracY > 0.5)  { direction = 'up';    targetY = Math.floor(a.y) + 1; }
+            else if (fracY > 0)    { direction = 'down';  targetY = Math.floor(a.y);     }
+        }
+
+        beliefs.agents.set(a.id, {
+            x: a.x, y: a.y,
+            moving, direction,
+            targetX, targetY,
+        });
+
+        //console.log(`[updateAgents] "${a.name}" (${a.id}) @ (${a.x},${a.y}) moving:${moving} dir:${direction} → target:(${targetX},${targetY})`);
+    }
+
+    //console.log(`[updateAgents] agenti tracciati:`, beliefs.agents.size);
+}
+
+export function getBlockedCells() {
+    const blocked = new Set();
+    for (const a of beliefs.agents.values()) {
+        blocked.add(`${Math.round(a.x)}_${Math.round(a.y)}`);
+        blocked.add(`${a.targetX}_${a.targetY}`);
+    }
+    //console.log(`[getBlockedCells] celle bloccate:`, blocked.size);
+    return blocked;
+}
+
+export function getAgentPositions() {
+    const out = [];
+    for (const a of beliefs.agents.values()) {
+        out.push({ x: Math.round(a.x), y: Math.round(a.y) });
+        if (a.moving) out.push({ x: a.targetX, y: a.targetY });
+    }
+    //console.log(`[getAgentPositions] posizioni note:`, out);
+    return out;
+}
