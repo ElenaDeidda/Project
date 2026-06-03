@@ -397,7 +397,12 @@ export function startLlmAgent(socket, beliefs, deps) {
         return await runMission(text, ctx, signal);
     }
 
-    initQueue({ beliefs, runMission: executeMission });
+    initQueue({
+        beliefs,
+        runMission: executeMission,
+        bdiPause:   deps?.bdiPause,
+        bdiResume:  deps?.bdiResume,
+    });
 
     // Ascolto chat: SOLO lettura, nessun handshake.
     // Ogni messaggio plausibile come missione viene messo in coda con priorità.
