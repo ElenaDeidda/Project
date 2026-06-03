@@ -64,10 +64,99 @@ function logPredicateIfChanged(predicate) {
     console.log(`[BDI-LLM] → ${predicate?.[0]}(${(predicate ?? []).slice(1).join(',')})`);
 }
 
+// ─── L2: regole attive installate dall'LLM via set_rule() ─────────────────────
+// Sono una struttura dati LOCALE al processo LLM. Il processo BDI non le vede
+// (ha il suo beliefs separato). Le regole influenzano:
+//   - applyRulesToBeliefs: post-processa beliefs DOPO updateSensing
+//     (es. aggiunge phantom blockers su forbidden_tile; rimuove pacchi troppo
+//      ricchi se max_parcel_reward)
+//   - applyRulesToPredicate: modifica la predicate prima di pushare l'intention
+//     (es. stack_size, zero_delivery, bonus_delivery)
+const activeRules = {};
+
+function applyRulesToBeliefs() {
+    // forbidden_tile: phantom agents bloccanti. La chiave "__forbidden_X_Y" è
+    // riconosciuta da snapshotWorld che li nasconde all'LLM.
+    if (Array.isArray(activeRules.forbiddenTiles)) {
+        for (const t of activeRules.forbiddenTiles) {
+            beliefs.agents.set(`__forbidden_${t.x}_${t.y}`, {
+                x: t.x, y: t.y, moving: false, direction: 'none',
+                targetX: t.x, targetY: t.y,
+            });
+        }
+    }
+    // max_parcel_reward: rimuovi dai beliefs i pacchi troppo cari così
+    // options.js non li considera nemmeno candidati.
+    if (typeof activeRules.maxParcelReward === 'number') {
+        for (const [id, p] of beliefs.parcels) {
+            if ((p.reward ?? 0) > activeRules.maxParcelReward) {
+                beliefs.parcels.delete(id);
+            }
+        }
+    }
+}
+
+function applyRulesToPredicate(predicate) {
+    if (!predicate) return predicate;
+    const [action, ...args] = predicate;
+
+    // stack_size: il BDI vuole consegnare ma porto meno (o più) di N → forzo
+    // a continuare a raccogliere finché non ne ho esattamente N.
+    if (Number.isInteger(activeRules.stackSize) && action === 'deliver') {
+        const N = activeRules.stackSize;
+        const carried = beliefs.carriedParcels?.length ?? 0;
+        if (carried !== N) {
+            console.log(`[RULES] stackSize=${N}: porto ${carried} → rimando consegna`);
+            return ['go_to_spawn'];
+        }
+    }
+
+    // zero_delivery: la tile target è vietata → ne scelgo un'altra (la più
+    // vicina che non sia nella lista).
+    if (Array.isArray(activeRules.zeroDeliveries) && action === 'deliver') {
+        const [x, y] = args;
+        if (activeRules.zeroDeliveries.some(t => t.x === x && t.y === y)) {
+            const alts = (beliefs.deliveryPoints || []).filter(
+                d => !activeRules.zeroDeliveries.some(t => t.x === d.x && t.y === d.y)
+            );
+            if (alts.length === 0) {
+                console.log(`[RULES] zeroDelivery: nessuna delivery permessa → go_to_spawn`);
+                return ['go_to_spawn'];
+            }
+            alts.sort((a, b) =>
+                (Math.abs(a.x-beliefs.me.x)+Math.abs(a.y-beliefs.me.y)) -
+                (Math.abs(b.x-beliefs.me.x)+Math.abs(b.y-beliefs.me.y)));
+            const alt = alts[0];
+            console.log(`[RULES] zeroDelivery: (${x},${y}) vietata → (${alt.x},${alt.y})`);
+            return ['deliver', alt.x, alt.y];
+        }
+    }
+
+    // bonus_delivery: se sto andando a una delivery NORMALE e ne esiste una
+    // bonus vicina (entro 5 passi extra), preferisco quella.
+    if (Array.isArray(activeRules.bonusDeliveries) && action === 'deliver') {
+        const [x, y] = args;
+        const targetIsBonus = activeRules.bonusDeliveries.some(t => t.x === x && t.y === y);
+        if (!targetIsBonus) {
+            const myDist = Math.abs(x - beliefs.me.x) + Math.abs(y - beliefs.me.y);
+            for (const b of activeRules.bonusDeliveries) {
+                const bDist = Math.abs(b.x - beliefs.me.x) + Math.abs(b.y - beliefs.me.y);
+                if (bDist <= myDist + 5) {
+                    console.log(`[RULES] bonusDelivery: ridiretto da (${x},${y}) a bonus (${b.x},${b.y})`);
+                    return ['deliver', b.x, b.y];
+                }
+            }
+        }
+    }
+
+    return predicate;
+}
+
 socket.onSensing((s) => {
     updateSensing(s);
+    applyRulesToBeliefs();
     if (bdiPaused) return;
-    const predicate = deliberate(generateOptions());
+    const predicate = applyRulesToPredicate(deliberate(generateOptions()));
     logPredicateIfChanged(predicate);
     agent.push(predicate);
 });
@@ -80,9 +169,12 @@ await Promise.all([
 
 console.log(`[LLM] Pronto. me=(${beliefs.me.x},${beliefs.me.y}) team=${beliefs.me.teamName} | mapTiles=${beliefs.mapTiles.size}`);
 
-// 4. Avvia l'agente LLM (queue + handler missioni). Gli passiamo i due hook
-//    pause/resume così la queue può silenziare il BDI durante una mission.
-startLlmAgent(socket, beliefs, { navigateTo, bdiPause, bdiResume });
+// 4. Avvia l'agente LLM (queue + handler missioni). Gli passiamo:
+//    - navigateTo: il pathfinding A* (anche per i tool dell'LLM)
+//    - bdiPause/bdiResume: per silenziare il BDI durante una mission
+//    - activeRules: l'oggetto condiviso che i tool set_rule/clear_rule
+//      mutano e che i filtri qui sopra leggono
+startLlmAgent(socket, beliefs, { navigateTo, bdiPause, bdiResume, activeRules });
 
 // Heartbeat ogni 5s: stampa stato compatto (BDI vs mission, posizione, carico)
 setInterval(() => {
@@ -96,10 +188,13 @@ setInterval(() => {
 }, 5000);
 
 // 5. Safety net del BDI: rideliberiamo ogni 200ms anche senza sensing nuovo
-//    (uguale a main.js). Tace quando bdiPaused.
+//    (uguale a main.js). Tace quando bdiPaused. Applichiamo sempre le regole
+//    (anche ai beliefs: i phantom blockers vengono persi da updateAgents.clear,
+//    quindi se sono trascorsi sensing nel frattempo li reinseriamo).
 while (true) {
     if (!bdiPaused) {
-        const predicate = deliberate(generateOptions());
+        applyRulesToBeliefs();
+        const predicate = applyRulesToPredicate(deliberate(generateOptions()));
         logPredicateIfChanged(predicate);
         agent.push(predicate);
     }
