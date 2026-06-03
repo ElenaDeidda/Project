@@ -11,6 +11,27 @@
 // Stima euristica: passi al secondo dell'agente (per convertire distanza→tempo)
 const STEPS_PER_POINT_THRESHOLD = 3; // se servono >3 passi per ogni punto → non conviene
 
+// Pattern che riconoscono una missione di Livello 2 = REGOLA persistente.
+// Sono missioni che modificano il comportamento normale del gioco per il
+// resto della partita. Vanno installate via set_rule() e tipicamente
+// raddoppiano/triplicano i punti per il resto della partita → priorità alta.
+const L2_PATTERNS = [
+    /stacks?\s+of/i,                 // "stacks of 3", "stacks of exactly 5 ..."
+    /every\s+time/i,                 // "every time you deliver"
+    /each\s+(time|delivery)/i,       // "each delivery"
+    /\balways\b/i,                   // "always"
+    /from\s+now\s+on/i,              // "from now on"
+    /\b(do\s+not|don'?t|avoid)\b.*\b(go|deliver|pick|cross)\b/i,
+    /if\s+you\s+(deliver|pick|drop|go)/i,
+    /\bno\s+reward\b/i,
+    /\b(double|triple|quadruple|halve|5x|2x|3x)\b/i,
+    /reward\s+(higher|lower|greater|less)\s+than/i,  // "reward higher than 10"
+];
+
+function looksLikeRule(text) {
+    return L2_PATTERNS.some(re => re.test(text));
+}
+
 
 /**
  * Estrae il reward dichiarato dal testo della missione.
@@ -90,8 +111,24 @@ function evalSafe(expr) {
 export function evaluateMission(missionText, beliefs) {
     const reward = extractReward(missionText);
     const cost   = estimateCost(missionText, beliefs);
+    const isL2   = looksLikeRule(missionText);
 
-    // 1. Trappola (reward esplicito ≤ 0) → mai eseguita
+    // 0. Livello 2 (regole persistenti): priorità ALTA per default. Vengono
+    //    intercettate solo dalle missioni-trappola davvero negative (sotto).
+    //    Costo ≈ 0 (l'LLM chiama solo set_rule), valore ≈ doppio per il resto
+    //    della partita → priorità 30 di base, smorzata se chiaramente penale
+    //    (es. "no reward if ..." che è comunque utile installare per evitare
+    //    sprechi di tempo su pacchi che non danno punti).
+    if (isL2) {
+        // Strict trap: reward esplicitamente negativo → la regola è dannosa,
+        // ma installarla è comunque innocuo (es. forbidden_tile). Diamo priorità
+        // alta anche in questo caso perché EVITA perdite future.
+        const priority = 30;
+        return { worth: true, priority, reward, cost,
+                 reason: `regola L2 persistente (pri=${priority})` };
+    }
+
+    // 1. Trappola atomica (reward esplicito ≤ 0, non-L2) → mai eseguita
     if (reward !== null && reward <= 0) {
         return { worth: false, priority: 0, reward, cost,
                  reason: 'reward negativo/nullo (trappola)' };
