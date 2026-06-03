@@ -36,9 +36,19 @@ if (!apiKey) {
 
 const client = new OpenAI({ baseURL, apiKey });
 
-async function callModel(messages, { temperature = TEMP } = {}) {
-    const res = await client.chat.completions.create({ model: MODEL, messages, temperature });
-    return res.choices?.[0]?.message?.content ?? '';
+const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? 30000);
+
+// Timeout esplicito: se l'API resta appesa (server lento, VPN traballante),
+// non vogliamo che il loop ReAct si pianti per minuti. Throw → il loop
+// gestisce l'errore come "formato non valido" e prova ancora.
+async function callModel(messages, { temperature = TEMP, timeoutMs = LLM_TIMEOUT_MS } = {}) {
+    return await Promise.race([
+        client.chat.completions.create({ model: MODEL, messages, temperature })
+            .then(r => r.choices?.[0]?.message?.content ?? ''),
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`LLM timeout ${timeoutMs}ms`)), timeoutMs)
+        ),
+    ]);
 }
 
 
@@ -544,6 +554,27 @@ async function runMission(missionText, ctx, signal = null) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FILTRO: messaggi di coordinamento di altri team da scartare in ingresso.
+// I team avversari shoutano in chat con loro protocolli ("ASA_COORD v1 ...",
+// "[HELLOTEAM]:...", "MAGNAGATTI ...") e finirebbero a saturare la queue come
+// finte missioni informative. Le riconosciamo per forma e le ignoriamo.
+// ─────────────────────────────────────────────────────────────────────────────
+function isProtocolMessage(text) {
+    const t = String(text).trim();
+    if (!t) return true;
+    // Tag tipo [HELLOTEAM]:..., [TEAM_X], [PROTO]
+    if (/^\[[A-Z_0-9-]+\]/i.test(t)) return true;
+    // PROTOCOLLO v1, NAME_LIKE v2 (token tutto-MAIUSCOLE + "v<n>")
+    if (/^[A-Z][A-Z_0-9]{2,}\s+v\d+\b/.test(t)) return true;
+    // Inizia con un blob JSON puro (oggetto/array) — non è linguaggio naturale
+    if (/^[\{\[]/.test(t)) return true;
+    // Prefissi noti di team coord
+    if (/^(ASA[_-]?COORD|TEAM[_-]?MSG|MAGNAGATTI|HELLOTEAM|HELLO\s)/i.test(t)) return true;
+    return false;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 5. ENTRY POINT — collega l'agente al socket e ascolta le special missions
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -581,6 +612,14 @@ export function startLlmAgent(socket, beliefs, deps) {
         else if (msg && typeof msg.mission === 'string') text = msg.mission;
         else if (msg && typeof msg.text    === 'string') text = msg.text;
         if (!text) return;
+
+        // Filtro: scarta i messaggi di coordinamento di altri team (i loro
+        // agenti shoutano protocolli tipo "ASA_COORD v1 ...", "[HELLOTEAM]:..."
+        // — non sono missioni del prof e ci farebbero solo perdere tempo.
+        if (isProtocolMessage(text)) {
+            console.log(`[LLM] ignoro protocollo da ${name} (${id}): "${text.slice(0, 60)}${text.length>60?'…':''}"`);
+            return;
+        }
 
         console.log(`[LLM] Mission da ${name} (${id}): "${text}"`);
         enqueue(text, id);
