@@ -648,6 +648,12 @@ export function startLlmAgent(socket, beliefs, deps) {
             return;
         }
 
+        // Accetta missioni SOLO dall'admin
+        if (name.toLowerCase() !== 'admin') {
+            console.log(`[LLM] ignoro messaggio da ${name} (${id}): non è admin`);
+            return;
+        }
+
         console.log(`[LLM] Mission da ${name} (${id}): "${text}"`);
         enqueue(text, id);
     });
