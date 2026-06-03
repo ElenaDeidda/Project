@@ -34,7 +34,9 @@ let _running = null;        // {text, senderId, priority, controller}
 let _ticker  = null;
 
 let _beliefs       = null;
-let _runMissionFn  = null;  // (text, ctx, senderId, signal) → Promise
+let _runMissionFn  = null;  // (text, senderId, signal) → Promise
+let _bdiPause      = () => {};
+let _bdiResume     = () => {};
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,10 +47,15 @@ let _runMissionFn  = null;  // (text, ctx, senderId, signal) → Promise
  * @param {object}   beliefs
  * @param {Function} runMission  funzione che esegue una missione.
  *                               firma: (text, senderId, signal) => Promise
+ * @param {Function} [bdiPause]  chiamato PRIMA di eseguire una mission
+ *                               (silenzia il loop BDI dell'LLM agent)
+ * @param {Function} [bdiResume] chiamato DOPO che la mission è finita
  */
-export function initQueue({ beliefs, runMission }) {
+export function initQueue({ beliefs, runMission, bdiPause, bdiResume }) {
     _beliefs       = beliefs;
     _runMissionFn  = runMission;
+    if (typeof bdiPause  === 'function') _bdiPause  = bdiPause;
+    if (typeof bdiResume === 'function') _bdiResume = bdiResume;
     if (_ticker) clearInterval(_ticker);
     _ticker = setInterval(tick, TICK_MS);
 }
@@ -65,14 +72,32 @@ export function enqueue(text, senderId) {
         return;
     }
 
+    // Valutazione "intelligente": se sto già trasportando pacchi che valgono
+    // più di quello che mi darebbe la mission, è meglio continuare il BDI
+    // (consegnare prima di occuparmi della mission). La mission resta in coda
+    // con priorità ridotta in modo che venga ripresa dopo la consegna.
+    let priority = verdict.priority;
+    let reasonExtra = '';
+    if (verdict.reward != null && _beliefs?.carriedParcels?.length > 0) {
+        const carriedValue = _beliefs.carriedParcels
+            .reduce((sum, p) => sum + (p.reward || 0), 0);
+        if (carriedValue > verdict.reward) {
+            // Smorza la priorità: la mission deve "battere" il vantaggio del carico
+            const ratio = verdict.reward / Math.max(1, carriedValue);
+            const newPri = priority * ratio;
+            reasonExtra = ` | abbasso pri (porto ${Math.round(carriedValue)}pt > ${verdict.reward}pt mission): ${priority.toFixed(2)} → ${newPri.toFixed(2)}`;
+            priority = newPri;
+        }
+    }
+
     const entry = {
         text, senderId,
-        priority: verdict.priority,
+        priority,
         verdict,
         addedAt: Date.now(),
     };
     _queue.push(entry);
-    console.log(`[QUEUE] +"${text}" (pri=${verdict.priority.toFixed(2)}) — ${verdict.reason}`);
+    console.log(`[QUEUE] +"${text}" (pri=${priority.toFixed(2)}) — ${verdict.reason}${reasonExtra}`);
 
     // Politica di interruzione: se sto eseguendo e il nuovo arrivato è MOLTO
     // più conveniente (≥ INTERRUPT_FACTOR×), interrompo la corrente.
@@ -151,11 +176,15 @@ function runOne(mission) {
     _running = { ...mission, controller };
 
     console.log(`[QUEUE] eseguo "${mission.text}" (pri=${mission.priority.toFixed(2)})`);
+    _bdiPause();   // silenzia il loop BDI dell'LLM agent durante la mission
 
     Promise.resolve()
         .then(() => _runMissionFn(mission.text, mission.senderId, controller.signal))
         .catch(err => console.warn(`[QUEUE] errore esecuzione: ${err?.message ?? err}`))
-        .finally(() => { _running = null; });
+        .finally(() => {
+            _running = null;
+            _bdiResume();   // il BDI riprende a giocare normalmente
+        });
 }
 
 
