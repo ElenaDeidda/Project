@@ -42,12 +42,34 @@ socket.onYou(me => {
 const agent = new IntentionRevision(socket);
 let bdiPaused = false;
 
-function bdiPause()  { bdiPaused = true;  agent.stop(); }
-function bdiResume() { bdiPaused = false; }
+function bdiPause()  {
+    if (bdiPaused) return;
+    bdiPaused = true;
+    agent.stop();
+    console.log(`[LLM-MAIN] ⏸  BDI in pausa — mission in esecuzione`);
+}
+function bdiResume() {
+    if (!bdiPaused) return;
+    bdiPaused = false;
+    console.log(`[LLM-MAIN] ▶  BDI ripreso — torno a giocare normalmente`);
+}
+
+// Log "intelligente" della predicate corrente: stampa solo quando cambia,
+// così non spammiamo. Utile per vedere cosa sta facendo l'agente.
+let _lastPredicate = null;
+function logPredicateIfChanged(predicate) {
+    const key = JSON.stringify(predicate);
+    if (key === _lastPredicate) return;
+    _lastPredicate = key;
+    console.log(`[BDI-LLM] → ${predicate?.[0]}(${(predicate ?? []).slice(1).join(',')})`);
+}
 
 socket.onSensing((s) => {
     updateSensing(s);
-    if (!bdiPaused) agent.push(deliberate(generateOptions()));
+    if (bdiPaused) return;
+    const predicate = deliberate(generateOptions());
+    logPredicateIfChanged(predicate);
+    agent.push(predicate);
 });
 
 // 3. Aspetta 'you' E 'map' prima di avviare: navigate_to ha bisogno di mapTiles.
@@ -62,9 +84,24 @@ console.log(`[LLM] Pronto. me=(${beliefs.me.x},${beliefs.me.y}) team=${beliefs.m
 //    pause/resume così la queue può silenziare il BDI durante una mission.
 startLlmAgent(socket, beliefs, { navigateTo, bdiPause, bdiResume });
 
+// Heartbeat ogni 5s: stampa stato compatto (BDI vs mission, posizione, carico)
+setInterval(() => {
+    const x = Math.round(beliefs.me.x);
+    const y = Math.round(beliefs.me.y);
+    const carried = beliefs.carriedParcels?.length ?? 0;
+    const carriedValue = (beliefs.carriedParcels ?? [])
+        .reduce((s, p) => s + (p.reward || 0), 0);
+    const mode = bdiPaused ? '🤖 MISSION' : '🚚 BDI';
+    console.log(`[HEARTBEAT] ${mode} | @(${x},${y}) score=${beliefs.me.score ?? 0} | carry=${carried} (${carriedValue}pt)`);
+}, 5000);
+
 // 5. Safety net del BDI: rideliberiamo ogni 200ms anche senza sensing nuovo
 //    (uguale a main.js). Tace quando bdiPaused.
 while (true) {
-    if (!bdiPaused) agent.push(deliberate(generateOptions()));
+    if (!bdiPaused) {
+        const predicate = deliberate(generateOptions());
+        logPredicateIfChanged(predicate);
+        agent.push(predicate);
+    }
     await new Promise(r => setTimeout(r, 200));
 }
