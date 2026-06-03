@@ -49,7 +49,7 @@ async function callModel(messages, { temperature = TEMP } = {}) {
 // visibile all'LLM, aggiungilo qui.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function snapshotWorld(beliefs) {
+function snapshotWorld(beliefs, activeRules = {}) {
     const me = beliefs.me ?? {};
     const lines = [];
 
@@ -113,15 +113,25 @@ function snapshotWorld(beliefs) {
         }
     }
 
-    // Agenti visibili (nemici / altri)
-    const agents = [...(beliefs.agents?.values() ?? [])];
-    if (agents.length === 0) {
+    // Agenti visibili (nemici / altri). Saltiamo i "phantom" usati internamente
+    // per implementare forbidden_tile (chiave che inizia con __forbidden_).
+    const agentEntries = [...(beliefs.agents?.entries() ?? [])]
+        .filter(([k]) => !String(k).startsWith('__forbidden_'));
+    if (agentEntries.length === 0) {
         lines.push('visible_agents: none');
     } else {
-        lines.push(`visible_agents (${agents.length}):`);
-        for (const a of agents) {
+        lines.push(`visible_agents (${agentEntries.length}):`);
+        for (const [, a] of agentEntries) {
             lines.push(`  at=(${Math.round(a.x)},${Math.round(a.y)}) moving=${a.moving} dir=${a.direction}`);
         }
+    }
+
+    // Regole L2 attive (così l'LLM sa cosa ha già installato)
+    const ruleKeys = Object.keys(activeRules);
+    if (ruleKeys.length > 0) {
+        lines.push(`active_rules: ${JSON.stringify(activeRules)}`);
+    } else {
+        lines.push('active_rules: none');
     }
 
     // Config rilevante per le decisioni
@@ -164,7 +174,22 @@ function makeTools(ctx) {
         // Espone TUTTO quello che il BDI sa nei `beliefs`. L'LLM lo legge e
         // si arrangia: niente tool specifici per ogni tipo di missione.
         // Restituisce uno snapshot testuale compatto ma completo.
-        inspect: () => snapshotWorld(beliefs),
+        inspect: () => snapshotWorld(beliefs, deps?.activeRules ?? {}),
+
+        // ── Quick-win: la delivery più vicina a me ──────────────────────────
+        // Evita all'LLM il calcolo ripetuto delle distanze. Utile per
+        // missioni tipo "vai alla delivery più vicina".
+        nearest_delivery: () => {
+            const dps = beliefs.deliveryPoints ?? [];
+            if (dps.length === 0) return 'Nessuna delivery tile nota';
+            const me = beliefs.me;
+            let best = null, bestD = Infinity;
+            for (const d of dps) {
+                const dist = Math.abs(d.x - me.x) + Math.abs(d.y - me.y);
+                if (dist < bestD) { best = d; bestD = dist; }
+            }
+            return `Nearest delivery: (${best.x},${best.y}) at distance ${bestD}`;
+        },
 
         // ── L1: muovi verso una coordinata (usa A* o PDDL del BDI) ──────────
         navigate_to: async (input) => {
@@ -198,6 +223,91 @@ function makeTools(ctx) {
             socket.emitSay(to, { type: 'mission_answer', answer: String(input) });
             return `Risposta inviata a ${to}: ${input}`;
         },
+
+        // ── L2: installa una regola persistente sul gioco ───────────────────
+        // Le missioni di livello 2 sono REGOLE che modificano il comportamento
+        // di base (es. "consegna in stack di 3"). L'LLM le riconosce e le
+        // installa qui. Le regole vengono applicate dal loop BDI in llm_main.js.
+        //
+        // Input: JSON con {type, ...params}. Tipi supportati:
+        //   {"type":"stack_size", "n":3}
+        //     → consegna solo quando porti esattamente 3 pacchi
+        //   {"type":"forbidden_tile", "x":5, "y":7}
+        //     → A* evita la tile (può essere chiamato più volte per più tile)
+        //   {"type":"zero_delivery", "x":5, "y":7}
+        //     → mai consegnare su questa delivery (ne sceglie un'altra)
+        //   {"type":"bonus_delivery", "x":5, "y":7}
+        //     → preferisci questa delivery quando possibile
+        //   {"type":"max_parcel_reward", "value":10}
+        //     → non raccogliere pacchi con reward > 10
+        set_rule: (input) => {
+            if (!deps?.activeRules) return 'Error: activeRules non disponibile';
+            let r;
+            try { r = JSON.parse(String(input)); }
+            catch (e) { return `Error: input non è JSON valido: ${e.message}`; }
+            if (!r || typeof r.type !== 'string') return 'Error: serve {"type": "..."}';
+            const rules = deps.activeRules;
+            switch (r.type) {
+                case 'stack_size':
+                    if (!Number.isInteger(r.n) || r.n < 1) return 'Error: stack_size richiede n intero ≥ 1';
+                    rules.stackSize = r.n;
+                    return `Regola installata: stackSize=${r.n}`;
+                case 'forbidden_tile':
+                    if (!Number.isInteger(r.x) || !Number.isInteger(r.y)) return 'Error: serve x e y interi';
+                    rules.forbiddenTiles = rules.forbiddenTiles || [];
+                    if (!rules.forbiddenTiles.some(t => t.x === r.x && t.y === r.y))
+                        rules.forbiddenTiles.push({ x: r.x, y: r.y });
+                    return `Regola installata: forbidden_tile (${r.x},${r.y})`;
+                case 'zero_delivery':
+                    if (!Number.isInteger(r.x) || !Number.isInteger(r.y)) return 'Error: serve x e y interi';
+                    rules.zeroDeliveries = rules.zeroDeliveries || [];
+                    if (!rules.zeroDeliveries.some(t => t.x === r.x && t.y === r.y))
+                        rules.zeroDeliveries.push({ x: r.x, y: r.y });
+                    return `Regola installata: zero_delivery (${r.x},${r.y})`;
+                case 'bonus_delivery':
+                    if (!Number.isInteger(r.x) || !Number.isInteger(r.y)) return 'Error: serve x e y interi';
+                    rules.bonusDeliveries = rules.bonusDeliveries || [];
+                    if (!rules.bonusDeliveries.some(t => t.x === r.x && t.y === r.y))
+                        rules.bonusDeliveries.push({ x: r.x, y: r.y });
+                    return `Regola installata: bonus_delivery (${r.x},${r.y})`;
+                case 'max_parcel_reward':
+                    if (typeof r.value !== 'number') return 'Error: serve value numerico';
+                    rules.maxParcelReward = r.value;
+                    return `Regola installata: maxParcelReward=${r.value}`;
+                default:
+                    return `Error: tipo sconosciuto "${r.type}". Validi: stack_size, forbidden_tile, zero_delivery, bonus_delivery, max_parcel_reward`;
+            }
+        },
+
+        // Cancella una regola (o tutte se "all")
+        clear_rule: (input) => {
+            if (!deps?.activeRules) return 'Error: activeRules non disponibile';
+            const name = String(input).trim();
+            const rules = deps.activeRules;
+            if (name === 'all') {
+                for (const k of Object.keys(rules)) delete rules[k];
+                return 'Tutte le regole cancellate';
+            }
+            const map = {
+                stack_size:        'stackSize',
+                forbidden_tile:    'forbiddenTiles',
+                zero_delivery:     'zeroDeliveries',
+                bonus_delivery:    'bonusDeliveries',
+                max_parcel_reward: 'maxParcelReward',
+            };
+            const key = map[name];
+            if (!key) return `Error: nome sconosciuto "${name}"`;
+            delete rules[key];
+            return `Regola cancellata: ${name}`;
+        },
+
+        // Lista regole attive (utile per debugging dell'LLM stesso)
+        list_rules: () => {
+            const rules = deps?.activeRules ?? {};
+            const keys = Object.keys(rules);
+            if (keys.length === 0) return 'Nessuna regola attiva';
+            return JSON.stringify(rules, null, 0);
+        },
     };
 }
 
@@ -215,14 +325,30 @@ Available tools:
 - calculate(expression): evaluates a math expression. e.g. "4*2"
 - inspect(): returns a snapshot of the WHOLE world state you know about:
   your position, score, what you are carrying, map bounds, delivery points,
-  visible free parcels, visible agents, game config. Use this whenever the
-  mission references map features ("leftmost delivery", "the nearest parcel",
-  "edge tile", "where am I", "how many parcels do I carry", ...).
+  visible free parcels, visible agents, game config, ACTIVE RULES. Use
+  whenever the mission references map features ("leftmost delivery", "the
+  nearest parcel", "edge tile", "where am I", "how many parcels do I carry",
+  ...). Also use it to check active_rules before installing duplicates.
+- nearest_delivery(): returns the delivery point closest to my position,
+  with the Manhattan distance. Faster than computing manually from inspect.
 - navigate_to(x,y): moves the agent to coordinate x,y
 - pickup(): picks up parcels on the current tile
 - putdown(): drops carried parcels on the current tile
 - answer(text): sends a textual answer back to the agent who sent the mission
   (use for questions like "what is the capital of Italy?")
+- set_rule(json): installs a persistent rule that modifies the agent's normal
+  pickup/deliver behaviour. Input is a JSON object. Supported rule types:
+    {"type":"stack_size",       "n": 3}         → deliver only when carrying
+                                                   EXACTLY n parcels
+    {"type":"forbidden_tile",   "x": 5, "y": 7} → A* will avoid this tile
+                                                   (call multiple times for
+                                                   multiple tiles)
+    {"type":"zero_delivery",    "x": 5, "y": 7} → never deliver here
+    {"type":"bonus_delivery",   "x": 5, "y": 7} → prefer delivering here
+    {"type":"max_parcel_reward","value": 10}    → don't pick up parcels with
+                                                   reward > value
+- clear_rule(name): removes a previously installed rule. Pass "all" to wipe.
+- list_rules(): prints the currently installed rules (or "Nessuna").
 
 STRICT OUTPUT FORMAT — choose exactly one:
 
@@ -266,20 +392,38 @@ For "pick the nearest parcel and deliver" type missions:
   could not reach the destination. Do not try random nearby tiles.
 
 MISSION TYPES — IMPORTANT:
-The server gives points ONLY when the result is delivered back. There are two
-types of missions:
+There are THREE families. Always pick the right one based on the mission text.
 
-1) QUESTION / CALCULATION missions (e.g. "Calcola 5*5", "What is the capital
-   of Italy?", "Quanto fa 7+3?"). The server CANNOT see what you "thought" —
-   it only sees what you sent via the answer() tool.
-   You MUST end such missions with:
-     Action: answer
-     Action Input: <the final result, e.g. "25" or "Rome">
+1) QUESTION / CALCULATION (e.g. "Calcola 5*5", "What is the capital of Italy?",
+   "Quanto fa 7+3?"). The server CANNOT see what you "thought" — it only sees
+   what you sent via answer(). You MUST end such missions with:
+     Action: answer / Action Input: <the final result>
    Only AFTER the answer() Observation, output Final Answer.
 
-2) ACTION missions (e.g. "Move to (4,7)", "Pick up the parcel at (2,3)"). The
-   server checks the world state, not chat. Do the actions (navigate_to,
-   pickup, putdown). No answer() needed. Then Final Answer.
+2) ATOMIC ACTION (e.g. "Move to (4,7)", "Pick up the parcel at (2,3)",
+   "Drop a package in the leftmost tile"). The server checks the world state,
+   not chat. Do the actions (navigate_to, pickup, putdown). No answer() needed.
+   Then Final Answer.
+
+3) PERSISTENT RULE — Level 2 (e.g. "Deliver stacks of exactly 3 parcels",
+   "Do not go through tile (5,7)", "Every time you deliver in (2,2) you get
+   0 points", "If you deliver parcels with reward > 10 you get no reward").
+   These DO NOT describe a single action — they CHANGE THE RULES of the game
+   for the rest of the match. You MUST translate them into a set_rule() call.
+   Examples of mission → tool call:
+     "Deliver in stacks of exactly 3 to double the reward"
+        → set_rule({"type":"stack_size","n":3})
+     "Do not go through tile (5,7) otherwise you lose 50pts"
+        → set_rule({"type":"forbidden_tile","x":5,"y":7})
+     "Every time you deliver in (2,2) you get 0 pts"
+        → set_rule({"type":"zero_delivery","x":2,"y":2})
+     "Every time you deliver in (3,3) or (7,7) you get 5x pts"
+        → set_rule({"type":"bonus_delivery","x":3,"y":3})
+        → set_rule({"type":"bonus_delivery","x":7,"y":7})
+     "If you deliver parcels with reward higher than 10 you get no reward"
+        → set_rule({"type":"max_parcel_reward","value":10})
+   After installing the rule(s), produce Final Answer immediately. The rule
+   will then be enforced automatically by the agent's BDI loop.
 
 For calculation missions, the flow is exactly:
    Step 1: Action: calculate / Action Input: <expression>
