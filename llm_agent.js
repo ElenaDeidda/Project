@@ -502,13 +502,32 @@ async function runMission(missionText, ctx, signal = null) {
         { role: 'user',   content: `Mission: ${missionText}` },
     ];
 
+    // Tiene traccia dell'ultimo risultato calculate, per auto-rispondere se il
+    // passo successivo va in timeout (es. il modello risponde lentamente e il
+    // secondo turno LLM scade prima che possa chiamare answer()).
+    let lastCalculateResult = null;
+
     for (let step = 0; step < MAX_STEPS; step++) {
         if (signal?.aborted) {
             console.log(`[LLM] missione interrotta dalla queue`);
             return null;
         }
 
-        const out = await callModel(messages, { temperature: 0 });
+        let out;
+        try {
+            out = await callModel(messages, { temperature: 0 });
+        } catch (e) {
+            // Se il timeout scatta DOPO che abbiamo già calcolato un risultato,
+            // lo inviamo direttamente in chat senza aspettare un altro turno LLM.
+            if (lastCalculateResult !== null) {
+                console.warn(`[LLM] timeout al passo ${step + 1} — auto-rispondo con il risultato già calcolato`);
+                const tools = makeTools(ctx);
+                const obs = await tools.answer(String(lastCalculateResult));
+                console.log(`[LLM] answer(${lastCalculateResult}) → ${obs}`);
+                return `Auto-risposta inviata: ${lastCalculateResult}`;
+            }
+            throw e;
+        }
         messages.push({ role: 'assistant', content: out });
 
         console.log(`[LLM] step ${step + 1} ──────────`);
@@ -542,6 +561,14 @@ async function runMission(missionText, ctx, signal = null) {
             } catch (e) {
                 observation = `Error: ${e.message}`;
             }
+        }
+
+        // Memorizza il risultato di calculate per poterlo usare come auto-risposta
+        // in caso di timeout al passo successivo (es. il modello non riesce a
+        // completare il secondo turno e non chiama answer()).
+        if (act.action === 'calculate' && observation && !observation.startsWith('Error')) {
+            const m = observation.match(/Result:\s*(.+)/);
+            if (m) lastCalculateResult = m[1].trim();
         }
 
         console.log(`[LLM] ${act.action}(${act.input}) → ${observation}`);
