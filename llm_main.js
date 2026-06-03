@@ -96,6 +96,60 @@ function applyRulesToBeliefs() {
     }
 }
 
+// ─── Azioni "di state-modification" derivate dalle regole ─────────────────────
+// Alcune regole non riguardano solo le decisioni future ma anche la situazione
+// attuale (es. ho 5 pacchi in mano ma stack_size=3 → vanno scaricati 2).
+// Queste vanno trasformate in azioni concrete sul mondo (emitPutdown selettivo)
+// PRIMA che il BDI deliberi. Si chiama dopo updateSensing e prima di deliberate.
+async function applyRulesAsActions(socket, beliefs) {
+    const carried = beliefs.carriedParcels ?? [];
+    if (carried.length === 0) return;
+
+    // Se sono su una delivery tile, qualsiasi emitPutdown qui causerebbe la
+    // consegna immediata di tutti i pacchi. Niente drop "tattico" su delivery.
+    const x = Math.round(beliefs.me.x);
+    const y = Math.round(beliefs.me.y);
+    const onDelivery = (beliefs.deliveryPoints ?? []).some(d => d.x === x && d.y === y);
+    if (onDelivery) return;
+
+    const idsToDrop = new Set();
+
+    // max_parcel_reward: scarica i pacchi con reward sopra limite
+    if (typeof activeRules.maxParcelReward === 'number') {
+        for (const p of carried) {
+            if ((p.reward ?? 0) > activeRules.maxParcelReward) idsToDrop.add(p.id);
+        }
+    }
+
+    // stack_size: se ne porto più di N, scarico gli "extra" tenendo gli N
+    // di valore più alto. Compatibile con max_parcel_reward (applicato sopra).
+    if (Number.isInteger(activeRules.stackSize) && carried.length > activeRules.stackSize) {
+        const N = activeRules.stackSize;
+        const stillKept = carried.filter(p => !idsToDrop.has(p.id));
+        if (stillKept.length > N) {
+            const sorted = [...stillKept].sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0));
+            for (const p of sorted.slice(N)) idsToDrop.add(p.id);
+        }
+    }
+
+    if (idsToDrop.size > 0) {
+        const ids = [...idsToDrop];
+        console.log(`[RULES] scarico ${ids.length} pacchi non conformi: ${ids.join(',')} @(${x},${y})`);
+        try { await socket.emitPutdown(ids); }
+        catch (e) { console.warn(`[RULES] emitPutdown fallito: ${e?.message ?? e}`); }
+    }
+}
+
+// Helper: la tile è davvero occupata da un nemico (non phantom-block)?
+function isTileOccupiedByEnemy(tile, beliefs) {
+    for (const [id, a] of beliefs.agents.entries()) {
+        if (String(id).startsWith('__forbidden_')) continue;
+        if (Math.round(a.x) === tile.x && Math.round(a.y) === tile.y) return true;
+        if (a.moving && a.targetX === tile.x && a.targetY === tile.y) return true;
+    }
+    return false;
+}
+
 // Trova il pacco libero più vicino visibile. Null se non ce ne sono.
 function nearestFreeParcel(beliefs) {
     const free = [...(beliefs.parcels?.values() ?? [])].filter(p => !p.carriedBy);
@@ -141,7 +195,8 @@ function applyRulesToPredicate(predicate) {
 
     // stack_size: il BDI vuole consegnare ma porto meno di N → reindirizzo
     // verso un pickup utile (o una spawn tile vera) per arrivare a N.
-    // Se porto > N, lascio passare la consegna (meglio consegnare che impalarsi).
+    // Caso "carry > N" è gestito a monte da applyRulesAsActions (scarica gli
+    // extra), quindi qui ci arrivo solo se carry == N (consegno) o carry < N.
     if (Number.isInteger(activeRules.stackSize) && action === 'deliver') {
         const N = activeRules.stackSize;
         const carried = beliefs.carriedParcels?.length ?? 0;
@@ -149,9 +204,6 @@ function applyRulesToPredicate(predicate) {
             const alt = redirectAwayFromDeliver(beliefs);
             console.log(`[RULES] stackSize=${N}: porto ${carried} → ${alt[0]}(${alt.slice(1).join(',')})`);
             return alt;
-        }
-        if (carried > N) {
-            console.log(`[RULES] stackSize=${N}: porto ${carried} (più del target) → consegno comunque`);
         }
     }
 
@@ -177,13 +229,18 @@ function applyRulesToPredicate(predicate) {
     }
 
     // bonus_delivery: se sto andando a una delivery NORMALE e ne esiste una
-    // bonus vicina (entro 5 passi extra), preferisco quella.
+    // bonus LIBERA (non occupata da nemici) entro 5 passi extra, preferisco
+    // quella. Se sono tutte occupate, tengo la delivery normale del BDI.
     if (Array.isArray(activeRules.bonusDeliveries) && action === 'deliver') {
         const [x, y] = args;
         const targetIsBonus = activeRules.bonusDeliveries.some(t => t.x === x && t.y === y);
         if (!targetIsBonus) {
             const myDist = Math.abs(x - beliefs.me.x) + Math.abs(y - beliefs.me.y);
             for (const b of activeRules.bonusDeliveries) {
+                if (isTileOccupiedByEnemy(b, beliefs)) {
+                    console.log(`[RULES] bonusDelivery: (${b.x},${b.y}) occupata da nemico, skip`);
+                    continue;
+                }
                 const bDist = Math.abs(b.x - beliefs.me.x) + Math.abs(b.y - beliefs.me.y);
                 if (bDist <= myDist + 5) {
                     console.log(`[RULES] bonusDelivery: ridiretto da (${x},${y}) a bonus (${b.x},${b.y})`);
@@ -196,9 +253,10 @@ function applyRulesToPredicate(predicate) {
     return predicate;
 }
 
-socket.onSensing((s) => {
+socket.onSensing(async (s) => {
     updateSensing(s);
     applyRulesToBeliefs();
+    await applyRulesAsActions(socket, beliefs);   // scarica pacchi non conformi
     if (bdiPaused) return;
     const predicate = applyRulesToPredicate(deliberate(generateOptions()));
     logPredicateIfChanged(predicate);
@@ -238,6 +296,7 @@ setInterval(() => {
 while (true) {
     if (!bdiPaused) {
         applyRulesToBeliefs();
+        await applyRulesAsActions(socket, beliefs);
         const predicate = applyRulesToPredicate(deliberate(generateOptions()));
         logPredicateIfChanged(predicate);
         agent.push(predicate);
