@@ -589,8 +589,11 @@ export function startLlmAgent(socket, beliefs, deps) {
     const ctx = { socket, beliefs, deps, lastSender: null };
 
     // Bridge: la queue esegue le missioni chiamando questa funzione.
-    // Riceve text, senderId e un AbortSignal.
-    async function executeMission(text, senderId, signal) {
+    // Riceve text, senderId, un AbortSignal e il verdict del parser v2
+    // (kind/action/rule/question già strutturati). Per ora il loop ReAct
+    // lo ignora; l'executor deterministico (pezzo 2) lo userà al posto
+    // del ReAct.
+    async function executeMission(text, senderId, signal, verdict) {
         ctx.lastSender = senderId;
         return await runMission(text, ctx, signal);
     }
@@ -622,7 +625,10 @@ export function startLlmAgent(socket, beliefs, deps) {
         }
 
         console.log(`[LLM] Mission da ${name} (${id}): "${text}"`);
-        enqueue(text, id);
+        // enqueue è async (fa la chiamata LLM di parsing): fire-and-forget,
+        // gli errori finiscono nel log e non bloccano il listener chat.
+        enqueue(text, id).catch(e =>
+            console.warn(`[LLM] enqueue fallita: ${e?.message ?? e}`));
     });
 
     console.log('[LLM] Avviato — coda missioni attiva, in ascolto chat');

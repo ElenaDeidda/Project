@@ -15,7 +15,7 @@
 //      missione di pickup su coordinate dove non c'è più un pacco
 //      (probabilmente l'ha preso un altro agente) → scartata.
 
-import { evaluateMission } from './mission_evaluator.js';
+import { parseMission } from './mission_parser.js';
 
 const BUFFER_MS        = 500;   // raccolta-missioni prima di scegliere
 const INTERRUPT_FACTOR = 2.0;   // nuovo deve essere ≥ 2× la corrente per interrompere
@@ -65,8 +65,16 @@ export function initQueue({ beliefs, runMission, bdiPause, bdiResume }) {
 // ENQUEUE  — chiamato dall'handler onMsg con il testo della missione
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function enqueue(text, senderId) {
-    const verdict = evaluateMission(text, _beliefs);
+export async function enqueue(text, senderId) {
+    // Parser v2: UNA chiamata LLM traduce la missione in struttura; le
+    // decisioni (trappola/priorità/pausa BDI) sono deterministiche.
+    let verdict;
+    try {
+        verdict = await parseMission(text, _beliefs);
+    } catch (e) {
+        console.warn(`[QUEUE] parse fallito per "${text}": ${e?.message ?? e}`);
+        return;
+    }
     if (!verdict.worth) {
         console.log(`[QUEUE] scartata "${text}" — ${verdict.reason}`);
         return;
@@ -97,7 +105,7 @@ export function enqueue(text, senderId) {
         addedAt: Date.now(),
     };
     _queue.push(entry);
-    console.log(`[QUEUE] +"${text}" (pri=${priority.toFixed(2)}) — ${verdict.reason}${reasonExtra}`);
+    console.log(`[QUEUE] +"${text}" (L${verdict.level} ${verdict.kind}, pri=${priority.toFixed(2)}) — ${verdict.reason}${reasonExtra}`);
 
     // Politica di interruzione: se sto eseguendo e il nuovo arrivato è MOLTO
     // più conveniente (≥ INTERRUPT_FACTOR×), interrompo la corrente.
@@ -177,16 +185,21 @@ function runOne(mission) {
 
     const startedAt = Date.now();
     console.log(`[QUEUE] ▶ START "${mission.text}" (pri=${mission.priority.toFixed(2)}) — coda restante: ${_queue.length}`);
-    _bdiPause();   // silenzia il loop BDI dell'LLM agent durante la mission
+
+    // Le missioni noPause (domande/calcoli) NON fermano il BDI: l'agente
+    // continua a raccogliere/consegnare mentre risponde in chat.
+    const mustPause = !mission.verdict?.noPause;
+    if (mustPause) _bdiPause();
+    else console.log(`[QUEUE] missione "leggera" — il BDI continua a giocare`);
 
     Promise.resolve()
-        .then(() => _runMissionFn(mission.text, mission.senderId, controller.signal))
+        .then(() => _runMissionFn(mission.text, mission.senderId, controller.signal, mission.verdict))
         .catch(err => console.warn(`[QUEUE] ⚠ errore esecuzione: ${err?.message ?? err}`))
         .finally(() => {
             const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
             console.log(`[QUEUE] ■ END   "${mission.text}" — durata ${elapsed}s — coda restante: ${_queue.length}`);
             _running = null;
-            _bdiResume();   // il BDI riprende a giocare normalmente
+            if (mustPause) _bdiResume();   // il BDI riprende a giocare normalmente
         });
 }
 
