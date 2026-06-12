@@ -66,7 +66,7 @@ export function extractRewardRegex(text) {
     // ── reward con unità esplicita: "+10pts", "- 100 punti", "200 points" ──
     // Lo spazio tra segno e cifre è ammesso (era uno dei bug del vecchio parser).
     let reward = null;
-    const signed = t.match(/([+-]?\s*\d+(?:\.\d+)?)\s*(?:pts?|points?|punti|punto)\b/);
+    const signed = t.match(/([+-]?\s*\d+(?:\.\d+)?)\s*(?:pts?|pti|points?|punti|punto)\b/);
     if (signed) reward = Number(signed[1].replace(/\s+/g, ''));
 
     // ── verbi di perdita forzano il segno: "lose 50pts", "perdi 50" ──
@@ -358,36 +358,63 @@ function normCandidates(cands) {
         .filter(c => Number.isFinite(c.x) && Number.isFinite(c.y));
 }
 
+// La tile esiste sulla mappa ed è percorribile? (mappa vuota = contesto di
+// test/avvio → ottimisti). Filtra muri e coordinate fuori mappa PRIMA di
+// scegliere un target: era il bug del "(20,19) irraggiungibile" in 0.0s.
+function isWalkable(t, beliefs) {
+    const tiles = beliefs?.mapTiles;
+    if (!tiles || tiles.size === 0) return true;
+    const tile = tiles.get(`${t.x}_${t.y}`);
+    return !!tile && tile.type !== '0' && tile.type !== 0;
+}
+
 /**
  * Risolve il target di un'azione: coordinate (anche come espressioni "4*2"),
- * lista di candidati (→ il più vicino), o posto simbolico ("leftmost").
- * @returns {{target:{x:number,y:number}|null, cost:number}}
+ * lista di candidati (→ tutti i percorribili, dal più vicino), o posto
+ * simbolico ("leftmost").
+ * @returns {{target:{x,y}|null, cost:number, alternatives:Array, invalid:boolean}}
+ *   alternatives = altri candidati percorribili, in ordine di distanza:
+ *   l'executor li prova in sequenza se il primo risulta irraggiungibile.
+ *   invalid = c'erano coordinate ma nessuna è percorribile.
  */
 function resolveAction(action, beliefs) {
-    if (!action) return { target: null, cost: 0 };
+    if (!action) return { target: null, cost: 0, alternatives: [], invalid: false };
     const me = beliefs?.me;
-    let target = null;
+    const D  = (t) => me ? Math.abs(t.x - me.x) + Math.abs(t.y - me.y) : 0;
 
+    // 1. coordinate esplicite singole (anche espressioni "4*2")
     if (action.x != null && action.y != null) {
         try {
-            target = { x: Math.round(evalSafe(action.x)), y: Math.round(evalSafe(action.y)) };
+            const t = { x: Math.round(evalSafe(action.x)), y: Math.round(evalSafe(action.y)) };
+            if (!isWalkable(t, beliefs)) {
+                console.log(`[PARSER]   target (${t.x},${t.y}): muro o fuori mappa ✗`);
+                return { target: null, cost: 0, alternatives: [], invalid: true };
+            }
+            return { target: t, cost: D(t), alternatives: [], invalid: false };
         } catch { /* espressione non valutabile → prova le altre strade */ }
     }
-    if (!target) {
-        const cands = normCandidates(action.candidates);
-        if (cands.length > 0 && me) {
-            cands.sort((a, b) =>
-                (Math.abs(a.x - me.x) + Math.abs(a.y - me.y)) -
-                (Math.abs(b.x - me.x) + Math.abs(b.y - me.y)));
-            target = cands[0];
-        }
-    }
-    if (!target && action.place) target = extremeTile(action.place, beliefs);
 
-    const cost = (target && me)
-        ? Math.abs(target.x - me.x) + Math.abs(target.y - me.y)
-        : 0;
-    return { target, cost };
+    // 2. lista di candidati ("one of ...") → tieni i percorribili, ordina
+    //    per distanza; il primo è il target, gli altri sono il piano B.
+    const cands = normCandidates(action.candidates);
+    if (cands.length > 0) {
+        const good = [], bad = [];
+        for (const c of cands) (isWalkable(c, beliefs) ? good : bad).push(c);
+        good.sort((a, b) => D(a) - D(b));
+        console.log(`[PARSER]   candidati: ${
+            good.map(c => `(${c.x},${c.y}) d=${D(c)} ✓`).join('  ') || 'nessuno valido'
+        }${bad.length ? `  | scartati (muro/fuori mappa): ${bad.map(c => `(${c.x},${c.y})`).join(' ')}` : ''}`);
+        if (good.length === 0) return { target: null, cost: 0, alternatives: [], invalid: true };
+        return { target: good[0], cost: D(good[0]), alternatives: good.slice(1), invalid: false };
+    }
+
+    // 3. posto simbolico ("leftmost", ...)
+    if (action.place) {
+        const t = extremeTile(action.place, beliefs);
+        if (t) return { target: t, cost: D(t), alternatives: [], invalid: false };
+    }
+
+    return { target: null, cost: 0, alternatives: [], invalid: false };
 }
 
 
@@ -415,10 +442,14 @@ export async function parseMission(text, beliefs) {
     let parsed, source = 'llm';
     try {
         parsed = await llmParseWithRetry(text);
+        // Il "ragionamento" dell'LLM è tutto qui: il JSON in cui ha tradotto
+        // la missione. Da qui in poi decide solo codice deterministico.
+        console.log(`[PARSER] LLM ha capito: ${JSON.stringify(parsed)}`);
     } catch (e) {
         console.warn(`[PARSER] LLM giù dopo ${PARSE_ATTEMPTS} tentativi → fallback regex prudente`);
         parsed = fallbackParse(text);
         source = 'regex';
+        console.log(`[PARSER] regex ha capito: ${JSON.stringify(parsed)}`);
     }
 
     // 2. Rete di sicurezza sul reward: la regex decide il segno.
@@ -427,6 +458,9 @@ export async function parseMission(text, beliefs) {
     if (rgx.reward !== null) {
         // In disaccordo col modello → vince il valore più pessimista.
         reward = (reward === null) ? rgx.reward : Math.min(reward, rgx.reward);
+        if (parsed.reward != null && parsed.reward !== rgx.reward) {
+            console.log(`[PARSER]   reward: llm=${parsed.reward} regex=${rgx.reward} → uso ${reward} (il più pessimista)`);
+        }
     }
     const multiplier = rgx.multiplier ?? parsed.multiplier ?? null;
 
@@ -510,7 +544,13 @@ export async function parseMission(text, beliefs) {
                  reason: `fattore x${multiplier} < 1 (non conviene)` };
     }
 
-    const { target, cost } = resolveAction(parsed.action, beliefs);
+    const { target, cost, alternatives, invalid } = resolveAction(parsed.action, beliefs);
+
+    // Le coordinate c'erano ma nessuna è percorribile → inutile provarci.
+    if (invalid && !target) {
+        return { ...base, level: 1, worth: false, priority: 0,
+                 reason: 'tutte le coordinate indicate sono muri o fuori mappa: rinuncio' };
+    }
 
     // In fallback (LLM giù) si agisce solo a comprensione PIENA: target
     // esplicito risolto + reward esplicito positivo. Tutto il resto → scarto.
@@ -521,13 +561,13 @@ export async function parseMission(text, beliefs) {
 
     if (reward === null) {
         const worth = cost <= 10;
-        return { ...base, level: 1, target, cost, worth, priority: worth ? 1.0 : 0,
+        return { ...base, level: 1, target, cost, candidates: alternatives, worth, priority: worth ? 1.0 : 0,
                  reason: worth ? 'reward ignoto ma target vicino'
                                : 'reward ignoto e target lontano' };
     }
     const worth    = cost / reward <= STEPS_PER_POINT_THRESHOLD;
     const priority = worth ? reward / (cost + 1) : 0;
-    return { ...base, level: 1, target, cost, worth, priority,
-             reason: worth ? `${reward}pt in ${cost} passi (pri=${priority.toFixed(2)})`
+    return { ...base, level: 1, target, cost, candidates: alternatives, worth, priority,
+             reason: worth ? `${reward}pt in ${cost} passi (pri=${priority.toFixed(2)})${alternatives.length ? ` — ${alternatives.length} candidati di riserva` : ''}`
                            : `troppo costosa (${cost} passi per ${reward}pt)` };
 }

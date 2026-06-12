@@ -11,6 +11,11 @@ class PlanBase {
     stop()           { this.#stopped = true; }
 }
 
+// Log dei piani BDI: silenziosi di default (il BDI è collaudato, i log utili
+// sono quelli delle missioni). Riattivabili con LOG_BDI=true nel .env.
+const LOG_BDI = process.env.LOG_BDI === 'true';
+const logBdi  = (...a) => { if (LOG_BDI) console.log(...a); };
+
 export class GoPickUp extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
@@ -22,7 +27,7 @@ export class GoPickUp extends PlanBase {
         const parcel = beliefs.parcels.get(id);
         if (!parcel || parcel.carriedBy) throw [`Pacco ${id} non disponibile`];
 
-        console.log(`[PLANS] GoPickUp → (${x},${y})`);
+        logBdi(`[PLANS] GoPickUp → (${x},${y})`);
         const nav = await navigateTo(beliefs.me, {x, y}, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
@@ -37,7 +42,7 @@ export class GoPickUp extends PlanBase {
         if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito durante la navigazione`];
 
         const picked = await this.#socket.emitPickup();
-        console.log(`[PLANS] - GoPickUp -> picked = ${picked}`)
+        logBdi(`[PLANS] - GoPickUp -> picked = ${picked}`)
         if (!picked || picked.length === 0) throw [`Pickup vuoto in (${x},${y})`];
 
         beliefs.carrying       = true;
@@ -164,7 +169,7 @@ export class Deliver extends PlanBase {
 
         beliefs.carrying       = false;
         beliefs.carriedParcels = [];
-        console.log(`[PLANS] Depositati ${dropped?.length ?? '?'} pacchi. Score: ${beliefs.me.score}`);
+        logBdi(`[PLANS] Depositati ${dropped?.length ?? '?'} pacchi. Score: ${beliefs.me.score}`);
         return true;
     }
 }
@@ -183,13 +188,13 @@ export class GoToSpawn extends PlanBase {
             return true;
         }
 
-        console.log(`[PLANS] GoToSpawn → (${x},${y})`);
+        logBdi(`[PLANS] GoToSpawn → (${x},${y})`);
         const nav = await navigateTo(
             beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop
         );
 
         if (nav === 'stopped') {
-            console.log(`[PLANS] GoToSpawn INTERROTTO verso (${x},${y}) — ora \@ (${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`);
+            logBdi(`[PLANS] GoToSpawn INTERROTTO verso (${x},${y}) — ora @ (${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`);
             throw ['stopped'];
         }
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];

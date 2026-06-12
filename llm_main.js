@@ -54,10 +54,13 @@ function bdiResume() {
     console.log(`[LLM-MAIN] ▶  BDI ripreso — torno a giocare normalmente`);
 }
 
-// Log "intelligente" della predicate corrente: stampa solo quando cambia,
-// così non spammiamo. Utile per vedere cosa sta facendo l'agente.
+// Log della predicate BDI corrente (solo quando cambia). Il BDI è collaudato:
+// di default tace per non sommergere i log delle missioni — l'HEARTBEAT ogni
+// 5s basta a vedere che sta girando. Riattivabile con LOG_BDI=true nel .env.
+const LOG_BDI = process.env.LOG_BDI === 'true';
 let _lastPredicate = null;
 function logPredicateIfChanged(predicate) {
+    if (!LOG_BDI) return;
     const key = JSON.stringify(predicate);
     if (key === _lastPredicate) return;
     _lastPredicate = key;

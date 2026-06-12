@@ -102,5 +102,24 @@ const res = await run('Move to coordinate (9,9) and you get +100pts', { signal: 
 check('missione interrotta (risultato null)', res === null);
 check('NON è arrivato a (9,9)', !(Math.round(beliefs.me.x) === 9 && Math.round(beliefs.me.y) === 9));
 
+// ── 6. "one of [...]": primo candidato in zona chiusa → fallback sul secondo ─
+// Riproduce il bug visto in challenge: il candidato più vicino era
+// irraggiungibile e la missione moriva con "(20,19) irraggiungibile" in 0.0s.
+beliefs.mapTiles.set('7_8', { type: '0' });   // recinto attorno a (8,8):
+beliefs.mapTiles.set('8_7', { type: '0' });   // percorribile ma irraggiungibile
+beliefs.mapTiles.set('8_9', { type: '0' });
+beliefs.mapTiles.set('9_8', { type: '0' });
+Object.assign(beliefs.me, { x: 0, y: 7 });
+const r6 = await run('Go to one of (8,8) or (9,1) for a one-time bonus of 50pts');
+check('fallback candidati: arrivato comunque a (9,1)',
+      r6 !== null && Math.round(beliefs.me.x) === 9 && Math.round(beliefs.me.y) === 1);
+
+// ── 7. tutte le coordinate murate/fuori mappa → la missione si scarta ───────
+beliefs.mapTiles.set('2_2', { type: '0' });
+const v7 = await parseMission('Move to coordinate (2,2) and you get +100pts', beliefs);
+check('target murato → scartata al parse', v7.worth === false);
+const v8 = await parseMission('Move to coordinate (50,56) and you get +100pts', beliefs);
+check('target fuori mappa → scartata al parse', v8.worth === false);
+
 console.log(`\n${fail === 0 ? '🎉' : '⚠️'}  ${pass} ok, ${fail} falliti`);
 process.exit(fail === 0 ? 0 : 1);

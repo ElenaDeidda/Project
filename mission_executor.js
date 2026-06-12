@@ -122,11 +122,21 @@ async function execAction(text, verdict, ctx, signal) {
     if (aborted(signal)) return null;
 
     if (type === 'move') {
-        if (!target) throw new Error('move senza target risolto');
-        const r = await goTo(target, ctx, signal);
-        if (r === 'stopped') return null;
-        if (r !== 'reached') throw new Error(`(${target.x},${target.y}) irraggiungibile`);
-        return `arrivato a (${target.x},${target.y})`;
+        // Il parser fornisce il target più vicino + i candidati di riserva
+        // (missioni "one of ..."): se il primo è irraggiungibile (muro non
+        // mappato, zona chiusa, nemico piantato), si prova il successivo
+        // invece di rinunciare al bonus.
+        const cands = [target, ...(verdict.candidates ?? [])].filter(Boolean);
+        if (cands.length === 0) throw new Error('move senza target risolto');
+        for (let i = 0; i < cands.length; i++) {
+            const t = cands[i];
+            if (i > 0) log(`provo il candidato di riserva ${i}: (${t.x},${t.y})`);
+            const r = await goTo(t, ctx, signal);
+            if (r === 'stopped') return null;
+            if (r === 'reached') return `arrivato a (${t.x},${t.y})`;
+            log(`(${t.x},${t.y}) irraggiungibile (A* non trova un percorso)`);
+        }
+        throw new Error(`nessuno dei ${cands.length} target è raggiungibile`);
     }
 
     if (type === 'pickup') {
