@@ -46,6 +46,8 @@ export class IntentionRevision {
     }
 
     stop() { this.#current?.stop(); }
+
+    get currentPredicate() { return this.#current?.predicate ?? null; }
 }
 
 class IntentionDeliberation {
@@ -60,6 +62,8 @@ class IntentionDeliberation {
         this.#predicate = predicate;
         this.#socket    = socket;
     }
+
+    get predicate() { return this.#predicate; }
 
     stop() {
         this.#stopped = true;

@@ -2,6 +2,7 @@ import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
 import { beliefs, updateConfig, updateMap, updateSensing } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
+import { initDashboard, emitDashboardState } from './dashboard_server.js';
 import dotenv from 'dotenv';
 import fs from 'fs';
 
@@ -120,15 +121,65 @@ const { width, height } = await mapReady;
 // console.log(`Connesso Agente ${beliefs.me.name} con id = ${beliefs.me.id}, @ (${beliefs.me.x},${beliefs.me.y})`);
 // console.log(`Mappa: ${width}x${height} | Delivery points: ${beliefs.deliveryPoints.length}`);
 
+// Dashboard visuale
+initDashboard(Number(process.env.DASHBOARD_PORT ?? 3001));
+
+function buildStateBdi() {
+    const pred = agent.currentPredicate;
+    let bdiIntent = { type: 'idle', target: null, description: 'Idle' };
+    if (pred) {
+        const [action, ...args] = pred;
+        if (action === 'go_pick_up')
+            bdiIntent = { type: action, target: { x: args[0], y: args[1] },
+                          description: `GoPickUp → (${args[0]},${args[1]}) [${Math.round(args[3] ?? 0)}pt]` };
+        else if (action === 'deliver')
+            bdiIntent = { type: action, target: { x: args[0], y: args[1] },
+                          description: `Deliver → (${args[0]},${args[1]})` };
+        else if (action === 'go_to_spawn' && args[0] != null)
+            bdiIntent = { type: action, target: { x: args[0], y: args[1] },
+                          description: `Pattuglia spawn (${args[0]},${args[1]})` };
+        else
+            bdiIntent = { type: action, target: null, description: 'Pattuglia zona spawn' };
+    }
+    return {
+        map: {
+            width:          beliefs.mapWidth  || 20,
+            height:         beliefs.mapHeight || 20,
+            tiles:          [...beliefs.mapTiles.entries()].map(([k, v]) => {
+                                const [x, y] = k.split('_').map(Number);
+                                return { x, y, type: v.type };
+                            }),
+            deliveryPoints: beliefs.deliveryPoints,
+        },
+        agents: [{
+            role: 'bdi', id: beliefs.me.id, name: beliefs.me.name,
+            x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y),
+            score: beliefs.me.score,
+            carrying: beliefs.carriedParcels.map(p => ({ id: p.id, reward: p.reward })),
+        }],
+        parcels: [...beliefs.parcels.values()].map(p => ({
+            id: p.id, x: Math.round(p.x), y: Math.round(p.y),
+            reward: Math.round(p.reward), carriedBy: p.carriedBy,
+        })),
+        intentions: { bdi: bdiIntent, llm: null },
+        queue: { pending: [] },
+        bdiPaused: false,
+    };
+}
+
 // Registra sensing DOPO che beliefs.me.id è garantito impostato da onYou
+let _emitTs = 0;
 socket.onSensing( (s) => {
     updateSensing(s);
     agent.push( deliberate( generateOptions() ) );
+    const now = Date.now();
+    if (now - _emitTs >= 160) { _emitTs = now; emitDashboardState(buildStateBdi()); }
 });
 
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
 // Utile quando un pacco sparisce per timer (non arriva nessun sensing)
 while (true) {
     agent.push( deliberate( generateOptions() ) );
+    emitDashboardState(buildStateBdi());
     await new Promise(r => setTimeout(r, 200));
 }

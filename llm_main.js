@@ -17,6 +17,8 @@ const { beliefs, updateConfig, updateMap, updateSensing } = await import("./beli
 // non sta eseguendo una special mission.
 const { generateOptions, deliberate } = await import("./options.js");
 const { IntentionRevision } = await import("./intentions.js");
+const { queueState }        = await import("./mission_queue.js");
+const { initDashboard, emitDashboardState } = await import("./dashboard_server.js");
 
 // 1. Connessione al gioco
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
@@ -257,10 +259,12 @@ socket.onSensing(async (s) => {
     updateSensing(s);
     applyRulesToBeliefs();
     await applyRulesAsActions(socket, beliefs);   // scarica pacchi non conformi
-    if (bdiPaused) return;
-    const predicate = applyRulesToPredicate(deliberate(generateOptions()));
-    logPredicateIfChanged(predicate);
-    agent.push(predicate);
+    if (!bdiPaused) {
+        const predicate = applyRulesToPredicate(deliberate(generateOptions()));
+        logPredicateIfChanged(predicate);
+        agent.push(predicate);
+    }
+    maybeEmit();
 });
 
 // 3. Aspetta 'you' E 'map' prima di avviare: navigate_to ha bisogno di mapTiles.
@@ -270,6 +274,9 @@ await Promise.all([
 ]);
 
 console.log(`[LLM] Pronto. me=(${beliefs.me.x},${beliefs.me.y}) team=${beliefs.me.teamName} | mapTiles=${beliefs.mapTiles.size}`);
+
+// Dashboard visuale — porta configurabile via DASHBOARD_PORT (default 3001)
+initDashboard(Number(process.env.DASHBOARD_PORT ?? 3001));
 
 // 4. Avvia l'agente LLM (queue + handler missioni). Gli passiamo:
 //    - navigateTo: il pathfinding A* (anche per i tool dell'LLM)
@@ -289,6 +296,72 @@ setInterval(() => {
     console.log(`[HEARTBEAT] ${mode} | @(${x},${y}) score=${beliefs.me.score ?? 0} | carry=${carried} (${carriedValue}pt)`);
 }, 5000);
 
+// ─── Dashboard helpers ─────────────────────────────────────────────────────────
+function formatBdiIntent(pred) {
+    if (!pred) return { type: 'idle', target: null, description: 'Idle' };
+    const [action, ...args] = pred;
+    if (action === 'go_pick_up')
+        return { type: action, target: { x: args[0], y: args[1] },
+                 description: `GoPickUp → (${args[0]},${args[1]}) [${Math.round(args[3] ?? 0)}pt]` };
+    if (action === 'deliver')
+        return { type: action, target: { x: args[0], y: args[1] },
+                 description: `Deliver → (${args[0]},${args[1]})` };
+    if (action === 'go_to_spawn' && args[0] != null)
+        return { type: action, target: { x: args[0], y: args[1] },
+                 description: `Pattuglia spawn (${args[0]},${args[1]})` };
+    return { type: action, target: null, description: 'Pattuglia zona spawn' };
+}
+
+function buildDashboardState() {
+    const pred = agent.currentPredicate;
+    const qs   = queueState();
+    const llmR = qs.running;
+
+    return {
+        map: {
+            width:          beliefs.mapWidth  || 20,
+            height:         beliefs.mapHeight || 20,
+            tiles:          [...beliefs.mapTiles.entries()].map(([k, v]) => {
+                                const [x, y] = k.split('_').map(Number);
+                                return { x, y, type: v.type };
+                            }),
+            deliveryPoints: beliefs.deliveryPoints,
+        },
+        agents: [{
+            role:     'bdi',
+            id:       beliefs.me.id,
+            name:     beliefs.me.name,
+            x:        Math.round(beliefs.me.x),
+            y:        Math.round(beliefs.me.y),
+            score:    beliefs.me.score,
+            carrying: beliefs.carriedParcels.map(p => ({ id: p.id, reward: p.reward })),
+        }],
+        parcels: [...beliefs.parcels.values()].map(p => ({
+            id: p.id, x: Math.round(p.x), y: Math.round(p.y),
+            reward: Math.round(p.reward), carriedBy: p.carriedBy,
+        })),
+        intentions: {
+            bdi: formatBdiIntent(pred),
+            llm: llmR ? {
+                active:      true,
+                text:        llmR.text,
+                target:      null,
+                description: `"${llmR.text}"`,
+            } : null,
+        },
+        queue:     { pending: (qs.pending ?? []).map(m => ({ text: m.text, priority: m.priority, level: m.verdict?.level })) },
+        bdiPaused,
+    };
+}
+
+let _lastEmitMs = 0;
+function maybeEmit() {
+    const now = Date.now();
+    if (now - _lastEmitMs < 160) return;
+    _lastEmitMs = now;
+    emitDashboardState(buildDashboardState());
+}
+
 // 5. Safety net del BDI: rideliberiamo ogni 200ms anche senza sensing nuovo
 //    (uguale a main.js). Tace quando bdiPaused. Applichiamo sempre le regole
 //    (anche ai beliefs: i phantom blockers vengono persi da updateAgents.clear,
@@ -301,5 +374,6 @@ while (true) {
         logPredicateIfChanged(predicate);
         agent.push(predicate);
     }
+    maybeEmit();
     await new Promise(r => setTimeout(r, 200));
 }

@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Deliveroo Dashboard</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: #0b0b18;
+    color: #d0d0f0;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    padding: 14px;
+}
+
+/* ── header ── */
+#hdr {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+#hdr h1 {
+    font-size: 14px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #6060cc;
+}
+#conn {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #1a1a30;
+    color: #555;
+}
+#conn.live  { color: #4dff91; }
+#conn.lost  { color: #ff4d4d; }
+
+/* ── main layout ── */
+#layout {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+}
+
+/* ── canvas map ── */
+#map-wrap {
+    flex-shrink: 0;
+    line-height: 0;
+}
+canvas {
+    border: 1px solid #1e1e3a;
+    border-radius: 3px;
+    background: #0b0b18;
+    display: block;
+}
+#map-info {
+    font-size: 10px;
+    color: #333355;
+    margin-top: 4px;
+    text-align: center;
+}
+
+/* ── right panel ── */
+#panel {
+    min-width: 260px;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* ── agent cards ── */
+.card {
+    background: #10102a;
+    border-radius: 6px;
+    padding: 10px 12px;
+    border-left: 3px solid #333;
+    transition: opacity .3s;
+}
+.card.bdi  { border-color: #4da6ff; }
+.card.llm  { border-color: #4dff91; }
+.card.dim  { opacity: .45; }
+
+.card-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 8px;
+    font-weight: bold;
+}
+.card.bdi .card-title { color: #4da6ff; }
+.card.llm .card-title { color: #4dff91; }
+
+.stats {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 3px 10px;
+    font-size: 11px;
+    margin-bottom: 8px;
+}
+.lbl { color: #555577; }
+.val { color: #c0c0e0; }
+
+.action {
+    background: #080818;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 11px;
+    min-height: 26px;
+    color: #666;
+    word-break: break-word;
+}
+.action .arrow { color: #888; margin-right: 4px; }
+.action .txt   { color: #ffd700; }
+.action .idle  { color: #333355; font-style: italic; }
+
+/* ── mission queue ── */
+#queue-card {
+    background: #10102a;
+    border-radius: 6px;
+    padding: 10px 12px;
+}
+.sec-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #333366;
+    margin-bottom: 6px;
+}
+.q-item {
+    font-size: 10px;
+    color: #7070aa;
+    padding: 2px 0;
+    border-bottom: 1px solid #0e0e22;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.q-item:last-child { border-bottom: none; }
+.q-empty { color: #252540; font-style: italic; font-size: 10px; }
+
+/* ── legend ── */
+#legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    font-size: 10px;
+    color: #333355;
+    padding: 8px 12px;
+    background: #10102a;
+    border-radius: 6px;
+}
+.leg {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.sw {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+.sw.round { border-radius: 50%; }
+</style>
+</head>
+<body>
+
+<div id="hdr">
+    <h1>Deliveroo Dashboard</h1>
+    <span id="conn">⚪ Connessione...</span>
+</div>
+
+<div id="layout">
+    <div id="map-wrap">
+        <canvas id="map"></canvas>
+        <div id="map-info">—</div>
+    </div>
+
+    <div id="panel">
+
+        <!-- BDI card -->
+        <div class="card bdi" id="bdi-card">
+            <div class="card-title">● BDI Agent</div>
+            <div class="stats">
+                <span class="lbl">Pos</span>    <span class="val" id="bdi-pos">–</span>
+                <span class="lbl">Score</span>  <span class="val" id="bdi-score">–</span>
+                <span class="lbl">Carry</span>  <span class="val" id="bdi-carry">–</span>
+            </div>
+            <div class="action" id="bdi-action"><span class="idle">Attesa...</span></div>
+        </div>
+
+        <!-- LLM card (hidden se nessuna missione attiva e bdiPaused=false) -->
+        <div class="card llm" id="llm-card">
+            <div class="card-title">⚡ Missione LLM</div>
+            <div class="action" id="llm-action"><span class="idle">Nessuna missione — BDI attivo</span></div>
+        </div>
+
+        <!-- Mission queue -->
+        <div id="queue-card">
+            <div class="sec-title">Coda missioni</div>
+            <div id="q-list"><span class="q-empty">Nessuna missione in coda</span></div>
+        </div>
+
+        <!-- Legend -->
+        <div id="legend">
+            <div class="leg"><div class="sw" style="background:#1e2040;border:1px solid #2a2a60"></div>Tile percorribile</div>
+            <div class="leg"><div class="sw" style="background:#3d2000;border:1px solid #ff9500"></div>Delivery zone</div>
+            <div class="leg"><div class="sw round" style="background:#ffd700"></div>Pacco libero</div>
+            <div class="leg"><div class="sw round" style="background:#4da6ff"></div>Agente BDI</div>
+            <div class="leg"><div class="sw" style="background:#4da6ff44;border:2px dashed #4da6ff"></div>Target BDI</div>
+            <div class="leg"><div class="sw" style="background:#4dff9144;border:2px dashed #4dff91"></div>Target LLM</div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+'use strict';
+
+const canvas = document.getElementById('map');
+const ctx    = canvas.getContext('2d');
+const connEl = document.getElementById('conn');
+
+const MAX_PX = 560;
+let TILE     = 20;
+let mapData  = null;
+let delivSet = new Set();
+
+// ── SSE ─────────────────────────────────────────────────────────────
+function connect() {
+    const es = new EventSource('/events');
+    es.onopen = () => setConn(true);
+    es.onerror = () => { setConn(false); es.close(); setTimeout(connect, 2000); };
+    es.onmessage = (e) => {
+        try { onState(JSON.parse(e.data)); } catch {}
+    };
+}
+connect();
+
+function setConn(ok) {
+    connEl.textContent = ok ? '● LIVE' : '○ Disconnesso';
+    connEl.className   = ok ? 'live'   : 'lost';
+}
+
+// ── State handler ────────────────────────────────────────────────────
+function onState(s) {
+    if (s.map && (!mapData || s.map.width !== mapData.width || s.map.height !== mapData.height)) {
+        mapData = s.map;
+        TILE    = Math.max(8, Math.min(32, Math.floor(MAX_PX / Math.max(mapData.width, mapData.height))));
+        canvas.width  = mapData.width  * TILE;
+        canvas.height = mapData.height * TILE;
+        delivSet = new Set((mapData.deliveryPoints || []).map(p => `${p.x}_${p.y}`));
+    }
+    render(s);
+    updatePanel(s);
+    document.getElementById('map-info').textContent =
+        mapData ? `${mapData.width}×${mapData.height} | tile=${TILE}px` : '';
+}
+
+// ── Canvas rendering ─────────────────────────────────────────────────
+function px(x) { return x * TILE; }
+function py(y) { return y * TILE; }
+
+function render(s) {
+    if (!mapData) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 1 ── background (non-walkable)
+    ctx.fillStyle = '#0b0b18';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 2 ── tiles
+    for (const t of (mapData.tiles || [])) {
+        const x = px(t.x), y = py(t.y);
+        if (delivSet.has(`${t.x}_${t.y}`)) {
+            ctx.fillStyle = '#3d2000';
+            ctx.fillRect(x, y, TILE, TILE);
+            ctx.strokeStyle = '#ff9500';
+            ctx.lineWidth = 0.8;
+            ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+        } else {
+            ctx.fillStyle = '#1e2040';
+            ctx.fillRect(x, y, TILE, TILE);
+        }
+    }
+
+    // 3 ── grid lines (solo se tile abbastanza grandi)
+    if (TILE >= 14) {
+        ctx.strokeStyle = '#14142e';
+        ctx.lineWidth = 0.5;
+        for (let i = 0; i <= mapData.width;  i++) {
+            ctx.beginPath(); ctx.moveTo(i*TILE, 0); ctx.lineTo(i*TILE, canvas.height); ctx.stroke();
+        }
+        for (let j = 0; j <= mapData.height; j++) {
+            ctx.beginPath(); ctx.moveTo(0, j*TILE); ctx.lineTo(canvas.width, j*TILE); ctx.stroke();
+        }
+    }
+
+    // 4 ── target highlights (dashed border)
+    const bdiT = s.intentions?.bdi?.target;
+    const llmT = s.intentions?.llm?.target;
+    if (bdiT) drawTargetBorder(bdiT.x, bdiT.y, '#4da6ff');
+    if (llmT) drawTargetBorder(llmT.x, llmT.y, '#4dff91');
+
+    // 5 ── parcels
+    for (const p of (s.parcels || [])) {
+        if (p.carriedBy) continue;
+        const x = px(p.x), y = py(p.y);
+        const pad = Math.max(2, TILE * 0.15);
+        ctx.fillStyle = '#ffd700';
+        ctx.fillRect(x + pad, y + pad, TILE - pad * 2, TILE - pad * 2);
+        if (TILE >= 16) {
+            ctx.fillStyle = '#1a1000';
+            ctx.font = `bold ${Math.max(7, Math.floor(TILE * 0.32))}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(Math.round(p.reward), x + TILE / 2, y + TILE / 2);
+        }
+    }
+
+    // 6 ── arrows agent → target
+    for (const ag of (s.agents || [])) {
+        const tgt = s.intentions?.[ag.role]?.target;
+        if (tgt) {
+            drawArrow(
+                px(ag.x) + TILE / 2, py(ag.y) + TILE / 2,
+                px(tgt.x) + TILE / 2, py(tgt.y) + TILE / 2,
+                ag.role === 'bdi' ? '#4da6ff66' : '#4dff9166'
+            );
+        }
+    }
+
+    // 7 ── agents (sopra tutto)
+    for (const ag of (s.agents || [])) {
+        drawAgent(ag);
+    }
+}
+
+function drawTargetBorder(tx, ty, color) {
+    const x = px(tx), y = py(ty);
+    ctx.fillStyle = color + '18';
+    ctx.fillRect(x, y, TILE, TILE);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 2]);
+    ctx.strokeRect(x + 1, y + 1, TILE - 2, TILE - 2);
+    ctx.setLineDash([]);
+}
+
+function drawAgent(ag) {
+    const cx = px(ag.x) + TILE / 2;
+    const cy = py(ag.y) + TILE / 2;
+    const r  = Math.max(4, TILE / 2 - 1);
+    const col = ag.role === 'bdi' ? '#4da6ff' : '#4dff91';
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff88';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    if (TILE >= 12) {
+        ctx.fillStyle = '#000c';
+        ctx.font = `bold ${Math.max(7, Math.floor(TILE * 0.42))}px monospace`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(ag.role === 'bdi' ? 'B' : 'L', cx, cy);
+    }
+}
+
+function drawArrow(x1, y1, x2, y2, color) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const d  = Math.sqrt(dx * dx + dy * dy);
+    if (d < TILE * 1.2) return;
+    const ux = dx / d, uy = dy / d;
+    const r  = TILE / 2 + 1;
+    const ax = x1 + ux * r, ay = y1 + uy * r;
+    const bx = x2 - ux * r, by = y2 - uy * r;
+
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // punta freccia
+    const hl = Math.min(9, TILE * 0.45);
+    const ang = Math.atan2(by - ay, bx - ax);
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx - hl * Math.cos(ang - 0.42), by - hl * Math.sin(ang - 0.42));
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx - hl * Math.cos(ang + 0.42), by - hl * Math.sin(ang + 0.42));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+}
+
+// ── Panel updates ────────────────────────────────────────────────────
+function updatePanel(s) {
+    const bdiAg = (s.agents || []).find(a => a.role === 'bdi');
+    if (bdiAg) {
+        set('bdi-pos',   `(${bdiAg.x}, ${bdiAg.y})`);
+        set('bdi-score', bdiAg.score ?? '–');
+        const n = bdiAg.carrying?.length ?? 0;
+        const v = (bdiAg.carrying || []).reduce((s, p) => s + (p.reward || 0), 0);
+        set('bdi-carry', n > 0 ? `${n} (${Math.round(v)}pt)` : '0');
+    }
+
+    const bdiIntent = s.intentions?.bdi;
+    const bdiCard   = document.getElementById('bdi-card');
+    const bdiAction = document.getElementById('bdi-action');
+    const llmCard   = document.getElementById('llm-card');
+
+    // BDI card: dimmed when LLM is running
+    const llmActive = s.bdiPaused === true;
+    bdiCard.classList.toggle('dim', llmActive);
+
+    if (bdiIntent && bdiIntent.type !== 'idle') {
+        bdiAction.innerHTML = `<span class="arrow">→</span><span class="txt">${esc(bdiIntent.description)}</span>`;
+    } else {
+        bdiAction.innerHTML = `<span class="idle">${llmActive ? 'In pausa — missione LLM in corso' : 'Idle'}</span>`;
+    }
+
+    // LLM card
+    const llmIntent = s.intentions?.llm;
+    if (llmActive && llmIntent?.active) {
+        llmCard.classList.remove('dim');
+        document.getElementById('llm-action').innerHTML =
+            `<span class="arrow">⚡</span><span class="txt">${esc(llmIntent.description)}</span>`;
+    } else {
+        llmCard.classList.add('dim');
+        document.getElementById('llm-action').innerHTML =
+            `<span class="idle">Nessuna missione — BDI attivo</span>`;
+    }
+
+    // Queue
+    const ql   = document.getElementById('q-list');
+    const pend = s.queue?.pending ?? [];
+    if (pend.length === 0) {
+        ql.innerHTML = '<span class="q-empty">Nessuna missione in coda</span>';
+    } else {
+        ql.innerHTML = pend.slice(0, 6).map(m =>
+            `<div class="q-item">
+                <span style="color:#4da6ff88">L${m.level ?? '?'}</span>
+                ${esc(m.text)}
+                <span style="color:#33334a"> pri=${(m.priority ?? 0).toFixed(1)}</span>
+            </div>`
+        ).join('');
+    }
+}
+
+function set(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+}
+function esc(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>

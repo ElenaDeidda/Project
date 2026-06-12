@@ -6,6 +6,8 @@ export const beliefs = {
     config:         {},
     mapTiles:       new Map(),
     isDirectionalMap: false,
+    mapWidth:       0,
+    mapHeight:      0,
     deliveryPoints: [],
     parcels:        new Map(),
     agents:         new Map(),   // id → { x, y, moving, direction, targetX, targetY }
@@ -23,6 +25,8 @@ export function updateConfig(config) {
 }
 
 export function updateMap(width, height, tiles) {
+    beliefs.mapWidth  = width;
+    beliefs.mapHeight = height;
     // --- 1. Costruisce mapTiles e deliveryPoints ---
     const ARROW_TYPES = new Set(['→', '←', '↑', '↓']);
     for (const tile of tiles) {
