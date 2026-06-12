@@ -22,6 +22,7 @@
 import { callModel } from './llm_client.js';
 import { evalSafe } from './mission_parser.js';
 import { installRule } from './rules_engine.js';
+import { reachableDistances } from './moves.js';
 
 // ── helper geometrici sui beliefs ────────────────────────────────────────────
 
@@ -56,6 +57,35 @@ async function goTo(target, ctx, signal, { opportunistic = true } = {}) {
 }
 
 function aborted(signal) { return signal?.aborted === true; }
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Distanze REALI di percorso (BFS) da dove sono, IGNORANDO gli agenti:
+// distingue "irraggiungibile per sempre" (muri → inutile insistere) da
+// "bloccato in questo momento" (nemico di passaggio → riprovare paga).
+function pathDistances(ctx) {
+    const { beliefs } = ctx;
+    return reachableDistances(beliefs.me, beliefs.mapTiles, null, beliefs.isDirectionalMap);
+}
+
+// navigateTo fallisce SUBITO se un nemico tappa il corridoio. Il BDI non se
+// ne accorge perché ritenta ogni 200ms; le missioni devono fare lo stesso:
+// qualche tentativo con pausa prima di arrendersi (i nemici si spostano).
+const NAV_RETRIES        = 3;
+const NAV_RETRY_PAUSE_MS = 1500;
+
+async function goToRobust(target, ctx, signal, opts = {}) {
+    const retries = opts.retries ?? NAV_RETRIES;
+    for (let i = 1; i <= retries; i++) {
+        if (aborted(signal)) return 'stopped';
+        const r = await goTo(target, ctx, signal, opts);
+        if (r !== 'failed') return r;          // 'reached' o 'stopped'
+        if (i < retries) {
+            console.log(`[EXEC] percorso verso (${target.x},${target.y}) bloccato (probabile agente di passaggio) — riprovo tra ${NAV_RETRY_PAUSE_MS / 1000}s (${i}/${retries})`);
+            await sleep(NAV_RETRY_PAUSE_MS);
+        }
+    }
+    return 'failed';
+}
 
 
 // ── QUESTION ─────────────────────────────────────────────────────────────────
@@ -110,33 +140,55 @@ async function execAction(text, verdict, ctx, signal) {
 
     // "Prima consegno": SOLO L1 move con pacchi in mano (per drop i pacchi
     // SERVONO; per pickup la deviazione di solito non vale la pena).
+    // La delivery si sceglie per distanza REALE di percorso (non in linea
+    // d'aria) e solo tra quelle raggiungibili in questo momento.
     if (type === 'move' && verdict.level === 1 && (beliefs.carriedParcels?.length ?? 0) > 0) {
-        const d = nearestDelivery(beliefs);
-        if (d) {
-            log(`porto ${beliefs.carriedParcels.length} pacchi → prima consegno a (${d.x},${d.y})`);
-            const r = await goTo(d, ctx, signal);           // opportunistic: consegna all'arrivo
+        const dists = pathDistances(ctx);
+        const dps = (beliefs.deliveryPoints ?? [])
+            .filter(d => dists.has(`${d.x}_${d.y}`))
+            .sort((a, b) => dists.get(`${a.x}_${a.y}`) - dists.get(`${b.x}_${b.y}`));
+        if (dps.length === 0) {
+            log(`porto ${beliefs.carriedParcels.length} pacchi ma nessuna delivery raggiungibile ora → salto la consegna preventiva`);
+        } else {
+            const d = dps[0];
+            log(`porto ${beliefs.carriedParcels.length} pacchi → prima consegno a (${d.x},${d.y}) [${dists.get(`${d.x}_${d.y}`)} passi]`);
+            const r = await goToRobust(d, ctx, signal);     // opportunistic: consegna all'arrivo
             if (r === 'stopped' || aborted(signal)) return null;
-            if (r === 'failed') log(`delivery irraggiungibile, procedo con la task`);
+            if (r === 'failed') log(`delivery bloccata, procedo con la task`);
         }
     }
     if (aborted(signal)) return null;
 
     if (type === 'move') {
-        // Il parser fornisce il target più vicino + i candidati di riserva
-        // (missioni "one of ..."): se il primo è irraggiungibile (muro non
-        // mappato, zona chiusa, nemico piantato), si prova il successivo
-        // invece di rinunciare al bonus.
-        const cands = [target, ...(verdict.candidates ?? [])].filter(Boolean);
-        if (cands.length === 0) throw new Error('move senza target risolto');
-        for (let i = 0; i < cands.length; i++) {
-            const t = cands[i];
-            if (i > 0) log(`provo il candidato di riserva ${i}: (${t.x},${t.y})`);
-            const r = await goTo(t, ctx, signal);
+        // Il parser fornisce target + candidati di riserva (missioni "one of").
+        // Qui si separano i candidati in:
+        //   - zone chiuse (irraggiungibili anche IGNORANDO i nemici) → scartati
+        //   - raggiungibili → tentati in ordine di distanza reale, con retry
+        //     (un fallimento di A* di solito è un nemico di passaggio)
+        const all = [target, ...(verdict.candidates ?? [])].filter(Boolean);
+        if (all.length === 0) throw new Error('move senza target risolto');
+
+        const dists  = pathDistances(ctx);
+        const open   = [], closed = [];
+        for (const t of all) (dists.has(`${t.x}_${t.y}`) ? open : closed).push(t);
+        if (closed.length) {
+            log(`candidati in zone chiuse della mappa (muri, non nemici): ${closed.map(t => `(${t.x},${t.y})`).join(' ')} → scartati`);
+        }
+        if (open.length === 0) {
+            throw new Error(`nessun candidato raggiungibile: ${closed.length} in zone chiuse della mappa`);
+        }
+        open.sort((a, b) => dists.get(`${a.x}_${a.y}`) - dists.get(`${b.x}_${b.y}`));
+        log(`ordine di tentativo (distanza reale): ${open.map(t => `(${t.x},${t.y})=${dists.get(`${t.x}_${t.y}`)} passi`).join('  ')}`);
+
+        for (let i = 0; i < open.length; i++) {
+            const t = open[i];
+            if (i > 0) log(`provo il candidato successivo: (${t.x},${t.y})`);
+            const r = await goToRobust(t, ctx, signal);
             if (r === 'stopped') return null;
             if (r === 'reached') return `arrivato a (${t.x},${t.y})`;
-            log(`(${t.x},${t.y}) irraggiungibile (A* non trova un percorso)`);
+            log(`(${t.x},${t.y}) resta bloccato dopo ${NAV_RETRIES} tentativi`);
         }
-        throw new Error(`nessuno dei ${cands.length} target è raggiungibile`);
+        throw new Error(`tutti i ${open.length} candidati raggiungibili restano bloccati da agenti: rinuncio`);
     }
 
     if (type === 'pickup') {
@@ -144,7 +196,7 @@ async function execAction(text, verdict, ctx, signal) {
         // può essere cambiata dalla messa in coda).
         const dest = target ?? nearestFreeParcel(beliefs);
         if (!dest) throw new Error('nessun pacco da raccogliere in vista: rinuncio');
-        const r = await goTo(dest, ctx, signal);            // opportunistic raccoglie già
+        const r = await goToRobust(dest, ctx, signal);      // opportunistic raccoglie già
         if (r === 'stopped') return null;
         if (r !== 'reached') throw new Error(`pacco a (${dest.x},${dest.y}) irraggiungibile`);
         await socket.emitPickup();                          // doppia sicurezza
@@ -159,7 +211,7 @@ async function execAction(text, verdict, ctx, signal) {
             const p = nearestFreeParcel(beliefs);
             if (!p) throw new Error('drop richiesto ma nessun pacco in mano né in vista: rinuncio');
             log(`niente in mano → raccolgo il pacco a (${Math.round(p.x)},${Math.round(p.y)})`);
-            const r1 = await goTo(p, ctx, signal);
+            const r1 = await goToRobust(p, ctx, signal);
             if (r1 === 'stopped') return null;
             if (r1 !== 'reached') throw new Error('pacco da raccogliere irraggiungibile');
             await socket.emitPickup();
@@ -168,7 +220,7 @@ async function execAction(text, verdict, ctx, signal) {
 
         // opportunistic=false: NON devo consegnare il carico passando per caso
         // sopra una delivery — il pacco va depositato sulla tile richiesta.
-        const r2 = await goTo(target, ctx, signal, { opportunistic: false });
+        const r2 = await goToRobust(target, ctx, signal, { opportunistic: false });
         if (r2 === 'stopped') return null;
         if (r2 !== 'reached') throw new Error(`(${target.x},${target.y}) irraggiungibile`);
 

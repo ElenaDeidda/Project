@@ -121,5 +121,14 @@ check('target murato → scartata al parse', v7.worth === false);
 const v8 = await parseMission('Move to coordinate (50,56) and you get +100pts', beliefs);
 check('target fuori mappa → scartata al parse', v8.worth === false);
 
+// ── 8. blocco TRANSITORIO: nemico sul varco → retry → passa quando si sposta ─
+// (il BDI ci riesce perché ritenta ogni 200ms: le missioni ora fanno lo stesso)
+beliefs.mapTiles.set('8_7', { type: '1' });   // apro un varco nel recinto di (8,8)
+beliefs.agents.set('enemy1', { x: 8, y: 7, moving: false, direction: 'none', targetX: 8, targetY: 7 });
+setTimeout(() => { beliefs.agents.delete('enemy1'); console.log('   [TEST] il nemico si sposta dal varco'); }, 2000);
+const r8 = await run('Move to coordinate (8,8) and you get +100pts');
+check('retry su blocco transitorio: arrivato a (8,8)',
+      r8 !== null && Math.round(beliefs.me.x) === 8 && Math.round(beliefs.me.y) === 8);
+
 console.log(`\n${fail === 0 ? '🎉' : '⚠️'}  ${pass} ok, ${fail} falliti`);
 process.exit(fail === 0 ? 0 : 1);
