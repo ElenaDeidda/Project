@@ -43,6 +43,9 @@ const MISSIONS = [
     'Every time you deliver in (3,3) or (7,7) you get 5x pts than in a regular delivery tile',
     'If you deliver parcels with a score higher than 10, you get no reward.',
     'Do not go through tile (5,7) otherwise you lose 50pts.',
+    // ── casi "non capiti": col fallback DEVONO essere scartati, non tentati ──
+    'From now on, whenever you see a shiny parcel, do a little dance to get 30pts',
+    'Move to (4,7)',
     // ── L3 dal documento ──
     'Move both agents to the neighborhood of position (6,6) within a maximum distance of 3, and have them wait for each other. You will receive 500pts.',
     'If a parcel is initially picked up by one agent and later delivered by the other agent, you will receive a 200 points bonus.',
@@ -54,7 +57,7 @@ for (const text of MISSIONS) {
     const ms = Date.now() - t0;
     const verdict = v.worth ? '✅ ESEGUI' : '🚫 SCARTA';
     console.log(`\n"${text}"`);
-    console.log(`  ${verdict}  L${v.level} ${v.kind}  pri=${v.priority.toFixed(2)}  reward=${v.reward ?? '—'}  mult=${v.multiplier ?? '—'}  noPause=${v.noPause}  [${ms}ms]`);
+    console.log(`  ${verdict}  L${v.level} ${v.kind}/${v.source}  pri=${v.priority.toFixed(2)}  reward=${v.reward ?? '—'}  mult=${v.multiplier ?? '—'}  noPause=${v.noPause}  [${ms}ms]`);
     if (v.target) console.log(`  target=(${v.target.x},${v.target.y}) cost=${v.cost}`);
     if (v.rule)   console.log(`  rule=${JSON.stringify(v.rule)}`);
     console.log(`  → ${v.reason}`);

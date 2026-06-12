@@ -177,7 +177,7 @@ async function llmParse(text) {
             { role: 'system', content: PARSER_PROMPT },
             { role: 'user',   content: `Mission: "${text}"` },
         ],
-        { temperature: 0 },
+        { temperature: 0, timeoutMs: PARSE_TIMEOUT_MS },
     );
     // Il modello a volte avvolge il JSON in testo/fence: estraiamo il primo {...}
     const m = String(out).match(/\{[\s\S]*\}/);
@@ -185,10 +185,31 @@ async function llmParse(text) {
     return JSON.parse(m[0]);
 }
 
+// Politica "prima l'LLM": più tentativi con timeout corto ciascuno. Solo se
+// falliscono tutti si passa al fallback regex (che è volutamente fifone).
+const PARSE_ATTEMPTS   = Number(process.env.PARSER_ATTEMPTS ?? 2);
+const PARSE_TIMEOUT_MS = Number(process.env.PARSER_TIMEOUT_MS ?? 15000);
+
+async function llmParseWithRetry(text) {
+    let lastErr;
+    for (let i = 1; i <= PARSE_ATTEMPTS; i++) {
+        try {
+            return await llmParse(text);
+        } catch (e) {
+            lastErr = e;
+            console.warn(`[PARSER] tentativo LLM ${i}/${PARSE_ATTEMPTS} fallito: ${e.message}`);
+        }
+    }
+    throw lastErr;
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. FALLBACK SENZA LLM — se la chiamata fallisce (timeout/rete) non perdiamo
-//    la missione: classificazione grezza via regex, prudente.
+// 3. FALLBACK SENZA LLM — volutamente "FIFONE".
+//    Politica (decisa il 12/06): si esegue una missione SOLO se la si è capita
+//    davvero. L'LLM che risponde = capita. Se l'LLM è giù, la regex agisce
+//    solo sui template noti al 100%; tutto il resto viene SCARTATO: meglio
+//    perdere un bonus che eseguire una missione fraintesa e perdere punti.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RULE_PATTERNS = [
@@ -198,31 +219,82 @@ const RULE_PATTERNS = [
     /reward\s+(higher|lower|greater|less)\s+than/i,
 ];
 
+// Natura implicita di ogni tipo di regola (usata quando il modello non la dà):
+// opportunità = bonus opt-in; vincolo = penalità sul comportamento normale.
+const NATURE_BY_TYPE = {
+    stack_size:        'opportunity',
+    bonus_delivery:    'opportunity',
+    zero_delivery:     'constraint',
+    forbidden_tile:    'constraint',
+    max_parcel_reward: 'constraint',
+};
+
+function allParens(text) {
+    return [...String(text).matchAll(/\((\d+)\s*,\s*(\d+)\)/g)]
+        .map(m => [Number(m[1]), Number(m[2])]);
+}
+
+/**
+ * Estrazione DETERMINISTICA di una regola L2 dai template noti delle missioni
+ * del prof. Restituisce una regola strutturata solo se il testo combacia con
+ * un pattern conosciuto; altrimenti null (→ la missione verrà scartata).
+ */
+export function fallbackRule(text) {
+    const t = String(text).toLowerCase();
+
+    // "Deliver stacks of exactly N parcels..."
+    let m = t.match(/stacks?\s+of\s+(?:exactly\s+)?(\d+)/);
+    if (m) return { type: 'stack_size', n: Number(m[1]) };
+
+    // "Do not go/pass through tile (x,y)..."
+    if (/\b(do\s+not|don'?t|avoid|never)\b.*\b(go|pass|cross|through|walk)\b/.test(t)) {
+        const tiles = allParens(text);
+        if (tiles.length) return { type: 'forbidden_tile', tiles };
+    }
+
+    // "If you deliver parcels with a score/reward higher than N, you get no reward"
+    m = t.match(/(?:score|reward|value)\s+(?:higher|greater|more)\s+than\s+(\d+(?:\.\d+)?)/);
+    if (m && /\b(no\s+reward|0\s*(?:pts?|points?|punti))\b/.test(t)) {
+        return { type: 'max_parcel_reward', value: Number(m[1]) };
+    }
+
+    // "Every time you deliver in (x,y) you get 0pts"  /  "... 5x pts"
+    if (/\bdeliver\w*\b/.test(t)) {
+        const tiles = allParens(text);
+        if (tiles.length && /\b0\s*(?:pts?|points?|punti)\b/.test(t)) {
+            return { type: 'zero_delivery', tiles };
+        }
+        if (tiles.length && /\b\d+(?:\.\d+)?\s*x\b/.test(t)) {
+            return { type: 'bonus_delivery', tiles };
+        }
+    }
+
+    return null;   // template sconosciuto → non capita → non si installa nulla
+}
+
 function fallbackParse(text) {
     const t = String(text).toLowerCase();
+    // Domande/calcoli: rispondere è innocuo (nessun movimento, niente da perdere)
     if (/\?\s*$/.test(t) || /^(what|who|where|which|how|calculate|calcola|quanto)\b/.test(t)) {
         return { kind: 'question', question: text };
     }
+    // Coordinamento: senza LLM non si tenta nemmeno (gestito dalle guardie)
     if (/\b(both|all)\s+agents?\b/.test(t) || /\bthe other agent\b/.test(t)) {
         return { kind: 'coordination' };
     }
+    // Regole: SOLO dai template noti, già strutturate (rule=null → scarto)
     if (RULE_PATTERNS.some(re => re.test(t))) {
-        // Natura della regola: "stacks of" e i bonus sono chiaramente opt-in
-        // (opportunity) → se il fattore è < 1 verranno scartate dalle guardie.
-        // Tutto il resto → 'constraint' per prudenza (installare non costa).
-        const nature = /stacks?\s+of/.test(t) || /\b\d+(\.\d+)?\s*x\b|bonus/.test(t)
-            ? 'opportunity' : 'constraint';
-        return { kind: 'rule', rule: null, rule_nature: nature };
+        const rule = fallbackRule(text);
+        return { kind: 'rule', rule,
+                 rule_nature: rule ? NATURE_BY_TYPE[rule.type] : null };
     }
+    // Azione: si estrae quel che c'è; le guardie poi pretendono target
+    // esplicito + reward esplicito positivo, sennò scartano.
     const action = { type: /\b(drop|putdown|consegna)\b/.test(t) ? 'drop'
                         : /\b(pick|raccogli|prendi)\b/.test(t)   ? 'pickup' : 'move' };
-    const parens = [...text.matchAll(/\((\d+)\s*,\s*(\d+)\)/g)];
-    if (parens.length === 1) { action.x = parens[0][1]; action.y = parens[0][2]; }
-    else if (parens.length > 1) {
-        // più coordinate ("one of (1,2), (3,4)...") → candidati, si sceglie il
-        // più vicino in resolveAction
-        action.candidates = parens.map(m => [Number(m[1]), Number(m[2])]);
-    }
+    const parens = allParens(text);
+    if (parens.length === 1)     { action.x = String(parens[0][0]); action.y = String(parens[0][1]); }
+    else if (parens.length > 1)  { action.candidates = parens; }   // "one of ..."
     else {
         const xm = text.match(/x\s*=\s*([\d*+()\s.\/-]+?)(?=\s*y\s*=|\s*$)/i);
         const ym = text.match(/y\s*=\s*([\d*+()\s.\/-]+?)(?=\s+to\b|\s*$)/i);
@@ -314,13 +386,17 @@ const STEPS_PER_POINT_THRESHOLD = 3;   // > 3 passi per punto → non conviene
  * }>}
  */
 export async function parseMission(text, beliefs) {
-    // 1. LLM-compilatore (1 chiamata). Se fallisce → fallback regex.
-    let parsed;
+    // 1. PRIMA l'LLM (PARSE_ATTEMPTS tentativi, timeout corto ciascuno).
+    //    Solo se falliscono tutti → fallback regex, che esegue unicamente i
+    //    casi capiti al 100% e scarta il resto (meglio un bonus perso che
+    //    una missione fraintesa che costa punti).
+    let parsed, source = 'llm';
     try {
-        parsed = await llmParse(text);
+        parsed = await llmParseWithRetry(text);
     } catch (e) {
-        console.warn(`[PARSER] LLM non disponibile (${e.message}) → fallback regex`);
+        console.warn(`[PARSER] LLM giù dopo ${PARSE_ATTEMPTS} tentativi → fallback regex prudente`);
         parsed = fallbackParse(text);
+        source = 'regex';
     }
 
     // 2. Rete di sicurezza sul reward: la regex decide il segno.
@@ -336,7 +412,7 @@ export async function parseMission(text, beliefs) {
         ? parsed.kind : 'action';
 
     const base = {
-        kind, reward, multiplier,
+        kind, reward, multiplier, source,
         action: parsed.action ?? null,
         rule: parsed.rule ?? null,
         question: parsed.question ?? null,
@@ -344,6 +420,7 @@ export async function parseMission(text, beliefs) {
     };
 
     // ── DOMANDA: si risponde in chat SENZA fermare il BDI ──
+    // (eseguibile anche in fallback: rispondere non muove nulla, rischio zero)
     if (kind === 'question') {
         return { ...base, level: 1, worth: true, priority: 2, noPause: true,
                  reason: 'domanda: rispondo senza fermare il BDI' };
@@ -355,20 +432,37 @@ export async function parseMission(text, beliefs) {
             return { ...base, level: 3, worth: false, priority: 0,
                      reason: `coordinamento con reward ${reward} ≤ 0 (trappola)` };
         }
+        if (source === 'regex') {
+            // Coordinare due agenti "alla cieca" senza aver capito la consegna
+            // è il modo migliore per perdere tempo su entrambi → si rinuncia.
+            return { ...base, level: 3, worth: false, priority: 0,
+                     reason: 'coordinamento ma LLM giù: non eseguo alla cieca' };
+        }
         return { ...base, level: 3, worth: true, priority: 40,
                  reason: `coordinamento L3 (reward=${reward ?? '?'})` };
     }
 
     // ── REGOLA (L2) ──
     if (kind === 'rule') {
-        const nature = parsed.rule_nature === 'opportunity' ? 'opportunity' : 'constraint';
+        // Serve la regola STRUTTURATA: dal modello, o dai template regex noti.
+        // Se nessuno dei due la produce → non l'abbiamo capita → non si
+        // installa niente (una regola sbagliata danneggia TUTTO il resto
+        // della partita, è l'errore più costoso possibile).
+        const rule = base.rule ?? fallbackRule(text);
+        if (!rule) {
+            return { ...base, level: 2, worth: false, priority: 0,
+                     reason: 'regola non capita con certezza: non installo nulla' };
+        }
+        const nature = parsed.rule_nature === 'opportunity' || parsed.rule_nature === 'constraint'
+            ? parsed.rule_nature
+            : (NATURE_BY_TYPE[rule.type] ?? 'constraint');
         if (nature === 'opportunity' &&
             ((multiplier !== null && multiplier < 1) || (reward !== null && reward <= 0))) {
-            return { ...base, level: 2, worth: false, priority: 0,
+            return { ...base, rule, level: 2, worth: false, priority: 0,
                      reason: `regola-opportunità svantaggiosa (x${multiplier ?? '?'}, ${reward ?? '?'}pt): continuo a giocare normale` };
         }
         // I vincoli si installano SEMPRE: servono a evitare perdite future.
-        return { ...base, level: 2, worth: true, priority: 30,
+        return { ...base, rule, level: 2, worth: true, priority: 30,
                  reason: nature === 'constraint'
                      ? 'regola-vincolo: la installo per evitare perdite'
                      : `regola-opportunità vantaggiosa (x${multiplier ?? '?'})` };
@@ -385,6 +479,14 @@ export async function parseMission(text, beliefs) {
     }
 
     const { target, cost } = resolveAction(parsed.action, beliefs);
+
+    // In fallback (LLM giù) si agisce solo a comprensione PIENA: target
+    // esplicito risolto + reward esplicito positivo. Tutto il resto → scarto.
+    if (source === 'regex' && (!target || reward === null)) {
+        return { ...base, level: 1, target, cost, worth: false, priority: 0,
+                 reason: 'azione capita solo in parte (LLM giù): non eseguo per non rischiare' };
+    }
+
     if (reward === null) {
         const worth = cost <= 10;
         return { ...base, level: 1, target, cost, worth, priority: worth ? 1.0 : 0,

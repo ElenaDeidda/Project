@@ -105,7 +105,7 @@ export async function enqueue(text, senderId) {
         addedAt: Date.now(),
     };
     _queue.push(entry);
-    console.log(`[QUEUE] +"${text}" (L${verdict.level} ${verdict.kind}, pri=${priority.toFixed(2)}) — ${verdict.reason}${reasonExtra}`);
+    console.log(`[QUEUE] +"${text}" (L${verdict.level} ${verdict.kind}/${verdict.source}, pri=${priority.toFixed(2)}) — ${verdict.reason}${reasonExtra}`);
 
     // Politica di interruzione: se sto eseguendo e il nuovo arrivato è MOLTO
     // più conveniente (≥ INTERRUPT_FACTOR×), interrompo la corrente.
