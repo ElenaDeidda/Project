@@ -43,6 +43,7 @@ socket.onYou(me => {
 // per non rubarle l'iniziativa.
 const agent = new IntentionRevision(socket);
 let bdiPaused = false;
+let _lastEmitMs = 0;
 
 function bdiPause()  {
     if (bdiPaused) return;
@@ -354,7 +355,6 @@ function buildDashboardState() {
     };
 }
 
-let _lastEmitMs = 0;
 function maybeEmit() {
     const now = Date.now();
     if (now - _lastEmitMs < 160) return;
