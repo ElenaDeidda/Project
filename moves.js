@@ -197,6 +197,9 @@ export async function navigateTo(
     walkableTiles,
     shouldStop  = () => false,
     retryLimit  = 3,
+    opportunistic = true,   // false → niente pickup/delivery automatici lungo il
+                            // percorso (serve alle missioni "drop in (x,y)": non
+                            // devo consegnare il pacco passando su una delivery)
 ) {
     // console.log(`[MOVES] navigateTo A*: (${Math.round(me.x)},${Math.round(me.y)}) → (${target.x},${target.y})`);
 
@@ -236,7 +239,7 @@ export async function navigateTo(
             if (result && result.x != null) {
                 me.x = result.x;
                 me.y = result.y;
-                await opportunisticActions(me, socket);
+                if (opportunistic) await opportunisticActions(me, socket);
             } else {
                 // console.warn(`[MOVES] Passo verso ${direction} rifiutato — ricalcolo A* (tentativo ${attempt + 1})`);
                 pathBroken = true;

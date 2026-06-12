@@ -20,9 +20,10 @@ const beliefs = {
     mapTiles: new Map(),
     deliveryPoints: [{ x: 9, y: 9 }],
 };
+// stessa forma dei beliefs veri: coordinate nella chiave, valore solo {type}
 for (let x = 0; x < 10; x++)
     for (let y = 0; y < 10; y++)
-        beliefs.mapTiles.set(`${x}_${y}`, { x, y, type: 1 });
+        beliefs.mapTiles.set(`${x}_${y}`, { type: '1' });
 
 const MISSIONS = [
     // ── L1 dal documento ──

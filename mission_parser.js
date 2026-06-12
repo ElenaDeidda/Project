@@ -312,8 +312,15 @@ function fallbackParse(text) {
 
 // Tile estrema della mappa ("leftmost" = x minima fra le tile percorribili;
 // a parità, la più vicina a me). Vale per QUALSIASI tile, delivery o no.
+// NB: in beliefs.mapTiles le coordinate stanno nella CHIAVE "x_y", il valore
+// contiene solo {type} (type '0' = muro, non percorribile).
 function extremeTile(place, beliefs) {
-    const tiles = [...(beliefs?.mapTiles?.values() ?? [])];
+    const tiles = [...(beliefs?.mapTiles?.entries() ?? [])]
+        .filter(([, t]) => t.type !== '0' && t.type !== 0)
+        .map(([k]) => {
+            const [x, y] = k.split('_').map(Number);
+            return { x, y };
+        });
     if (tiles.length === 0) return null;
     const key  = (place === 'leftmost' || place === 'rightmost') ? 'x' : 'y';
     const best = (place === 'leftmost' || place === 'topmost')
@@ -462,7 +469,10 @@ export async function parseMission(text, beliefs) {
                      reason: `regola-opportunità svantaggiosa (x${multiplier ?? '?'}, ${reward ?? '?'}pt): continuo a giocare normale` };
         }
         // I vincoli si installano SEMPRE: servono a evitare perdite future.
-        return { ...base, rule, level: 2, worth: true, priority: 30,
+        // noPause: installare una regola è istantaneo e non muove il corpo →
+        // il BDI continua a giocare (e se porto già pacchi, una bonus_delivery
+        // li reindirizza subito: nessun tempo perso).
+        return { ...base, rule, level: 2, worth: true, priority: 30, noPause: true,
                  reason: nature === 'constraint'
                      ? 'regola-vincolo: la installo per evitare perdite'
                      : `regola-opportunità vantaggiosa (x${multiplier ?? '?'})` };

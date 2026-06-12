@@ -16,6 +16,7 @@
 
 import OpenAI from 'openai';
 import { initQueue, enqueue } from './mission_queue.js';
+import { executeVerdict } from './mission_executor.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM — LiteLLM UniTN (come lab8)
@@ -589,12 +590,15 @@ export function startLlmAgent(socket, beliefs, deps) {
     const ctx = { socket, beliefs, deps, lastSender: null };
 
     // Bridge: la queue esegue le missioni chiamando questa funzione.
-    // Riceve text, senderId, un AbortSignal e il verdict del parser v2
-    // (kind/action/rule/question già strutturati). Per ora il loop ReAct
-    // lo ignora; l'executor deterministico (pezzo 2) lo userà al posto
-    // del ReAct.
+    // Le missioni capite dal parser (question/action/rule) vanno all'executor
+    // DETERMINISTICO: zero giri di ReAct, errori → si rinuncia e basta
+    // (politica: meglio un bonus perso che punti persi). Il loop ReAct resta
+    // solo per il coordinamento L3, in attesa del pezzo 4.
     async function executeMission(text, senderId, signal, verdict) {
         ctx.lastSender = senderId;
+        if (verdict && ['question', 'action', 'rule'].includes(verdict.kind)) {
+            return await executeVerdict(text, verdict, ctx, signal);
+        }
         return await runMission(text, ctx, signal);
     }
 
