@@ -115,7 +115,12 @@ Output ONLY one JSON object, no markdown fences, no explanations. Fields:
           "n":<int, stack_size only>,
           "tiles":[[x,y],...] (tile-based rules),
           "value":<number, max_parcel_reward only>} or null,
- "rule_nature": "opportunity" | "constraint" or null
+ "rule_nature": "opportunity" | "constraint" or null,
+ "coordination": <for kind=coordination, one of:>
+          {"type":"meet_at","x":<int>,"y":<int>,"max_distance":<int, default 3>}
+          {"type":"handoff"}
+          {"type":"hold_rows","parity":"odd"|"even"}
+          or null
 }
 
 Definitions:
@@ -127,6 +132,10 @@ Definitions:
   "always", "from now on", "stacks of", "do not go through", "if you deliver ... you get".
 - "coordination": involves BOTH/ALL the agents of the team ("both agents",
   "one agent ... the other agent", "all agents", waiting for each other or for a message).
+  Subtypes: "meet_at" = both agents reach the neighborhood of a position and wait
+  for each other; "handoff" = a parcel must be picked up by one agent and delivered
+  by the other; "hold_rows" = all agents move to rows of a given parity and wait
+  for a message before moving again (red light / green light).
 - "rule_nature": "constraint" if the rule changes the payoff of the NORMAL behaviour
   (penalty tiles, zero-point tiles, forbidden tiles, caps on parcel value) — the agent
   must adapt to avoid losing points. "opportunity" if it grants a bonus only when
@@ -168,7 +177,13 @@ Mission: "Do not go through tile (5,7) otherwise you lose 50pts."
 {"kind":"rule","question":null,"reward":-50,"multiplier":null,"action":null,"rule":{"type":"forbidden_tile","tiles":[[5,7]]},"rule_nature":"constraint"}
 
 Mission: "Move both agents to the neighborhood of position (6,6) within a maximum distance of 3, and have them wait for each other. You will receive 500pts."
-{"kind":"coordination","question":null,"reward":500,"multiplier":null,"action":{"type":"move","x":"6","y":"6","place":null,"candidates":null},"rule":null,"rule_nature":null}
+{"kind":"coordination","question":null,"reward":500,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"meet_at","x":6,"y":6,"max_distance":3}}
+
+Mission: "If a parcel is initially picked up by one agent and later delivered by the other agent, you will receive a 200 points bonus."
+{"kind":"coordination","question":null,"reward":200,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"handoff"}}
+
+Mission: "All agents must move to an odd-numbered row and wait for our message before moving again, as in a red light, green light game. 700 points bonus."
+{"kind":"coordination","question":null,"reward":700,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"hold_rows","parity":"odd"}}
 `.trim();
 
 async function llmParse(text) {
@@ -445,8 +460,15 @@ export async function parseMission(text, beliefs) {
             return { ...base, level: 3, worth: false, priority: 0,
                      reason: 'coordinamento ma LLM giù: non eseguo alla cieca' };
         }
-        return { ...base, level: 3, worth: true, priority: 40,
-                 reason: `coordinamento L3 (reward=${reward ?? '?'})` };
+        // Serve il sottotipo STRUTTURATO (meet_at/handoff/hold_rows): senza,
+        // l'executor non saprebbe cosa fare → stessa politica delle regole.
+        const coord = parsed.coordination ?? null;
+        if (!coord || !['meet_at', 'handoff', 'hold_rows'].includes(coord.type)) {
+            return { ...base, level: 3, worth: false, priority: 0,
+                     reason: 'coordinamento non capito con certezza: rinuncio' };
+        }
+        return { ...base, coordination: coord, level: 3, worth: true, priority: 40,
+                 reason: `coordinamento L3 ${coord.type} (reward=${reward ?? '?'})` };
     }
 
     // ── REGOLA (L2) ──

@@ -21,6 +21,7 @@
 
 import { callModel } from './llm_client.js';
 import { evalSafe } from './mission_parser.js';
+import { installRule } from './rules_engine.js';
 
 // ── helper geometrici sui beliefs ────────────────────────────────────────────
 
@@ -88,69 +89,14 @@ async function execQuestion(text, verdict, ctx) {
 
 
 // ── RULE ─────────────────────────────────────────────────────────────────────
-// Installazione diretta della regola strutturata in activeRules (la stessa
-// struttura che il loop BDI di llm_main.js applica ad ogni ciclo).
-
-// Normalizza le tile di una regola: accetta {tiles:[[x,y],...]} o {x,y} secchi.
-function ruleTiles(rule) {
-    if (Array.isArray(rule.tiles)) {
-        return rule.tiles
-            .map(t => Array.isArray(t) ? { x: Number(t[0]), y: Number(t[1]) }
-                                       : { x: Number(t?.x), y: Number(t?.y) })
-            .filter(t => Number.isFinite(t.x) && Number.isFinite(t.y));
-    }
-    if (Number.isFinite(Number(rule.x)) && Number.isFinite(Number(rule.y))) {
-        return [{ x: Number(rule.x), y: Number(rule.y) }];
-    }
-    return [];
-}
-
-function pushTiles(list = [], tiles) {
-    for (const t of tiles) {
-        if (!list.some(e => e.x === t.x && e.y === t.y)) list.push(t);
-    }
-    return list;
-}
+// Delega a rules_engine.installRule, che oltre a salvare la regola applica i
+// side-effects immediati (es. forbidden_tile → la tile diventa un MURO in
+// beliefs.mapTiles, così il pathfinding la evita anche come destinazione).
 
 function execRule(verdict, ctx) {
     const rules = ctx.deps?.activeRules;
     if (!rules) throw new Error('activeRules non disponibile');
-    const rule = verdict.rule;
-
-    switch (rule.type) {
-        case 'stack_size': {
-            const n = Number(rule.n);
-            if (!Number.isInteger(n) || n < 1) throw new Error(`stack_size: n non valido (${rule.n})`);
-            rules.stackSize = n;
-            return `regola installata: stackSize=${n}`;
-        }
-        case 'max_parcel_reward': {
-            const v = Number(rule.value);
-            if (!Number.isFinite(v)) throw new Error(`max_parcel_reward: value non valido (${rule.value})`);
-            rules.maxParcelReward = v;
-            return `regola installata: maxParcelReward=${v}`;
-        }
-        case 'forbidden_tile': {
-            const tiles = ruleTiles(rule);
-            if (!tiles.length) throw new Error('forbidden_tile senza coordinate');
-            rules.forbiddenTiles = pushTiles(rules.forbiddenTiles, tiles);
-            return `regola installata: forbidden ${tiles.map(t => `(${t.x},${t.y})`).join(' ')}`;
-        }
-        case 'zero_delivery': {
-            const tiles = ruleTiles(rule);
-            if (!tiles.length) throw new Error('zero_delivery senza coordinate');
-            rules.zeroDeliveries = pushTiles(rules.zeroDeliveries, tiles);
-            return `regola installata: zero_delivery ${tiles.map(t => `(${t.x},${t.y})`).join(' ')}`;
-        }
-        case 'bonus_delivery': {
-            const tiles = ruleTiles(rule);
-            if (!tiles.length) throw new Error('bonus_delivery senza coordinate');
-            rules.bonusDeliveries = pushTiles(rules.bonusDeliveries, tiles);
-            return `regola installata: bonus_delivery ${tiles.map(t => `(${t.x},${t.y})`).join(' ')}`;
-        }
-        default:
-            throw new Error(`tipo di regola sconosciuto: ${rule.type}`);
-    }
+    return installRule(verdict.rule, rules, ctx.beliefs);
 }
 
 

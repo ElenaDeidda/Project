@@ -120,15 +120,23 @@ const { width, height } = await mapReady;
 // console.log(`Connesso Agente ${beliefs.me.name} con id = ${beliefs.me.id}, @ (${beliefs.me.x},${beliefs.me.y})`);
 // console.log(`Mappa: ${width}x${height} | Delivery points: ${beliefs.deliveryPoints.length}`);
 
+// --- Protocollo di squadra (missioni L3) ---
+// Il BDI resta un BDI puro: l'agente LLM gli manda solo GOAL semplici via chat
+// (goto/hold/resume/pickup/deliver, filtrati per teamId). Quando è "held" il
+// loop qui sotto tace e il corpo esegue il comando del compagno.
+const { initTeamCommands } = await import('./team_commands.js');
+const team = initTeamCommands(socket, agent, beliefs);
+
 // Registra sensing DOPO che beliefs.me.id è garantito impostato da onYou
 socket.onSensing( (s) => {
     updateSensing(s);
+    if (team.isHeld()) return;
     agent.push( deliberate( generateOptions() ) );
 });
 
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
 // Utile quando un pacco sparisce per timer (non arriva nessun sensing)
 while (true) {
-    agent.push( deliberate( generateOptions() ) );
+    if (!team.isHeld()) agent.push( deliberate( generateOptions() ) );
     await new Promise(r => setTimeout(r, 200));
 }
