@@ -3,8 +3,12 @@
 // naturale e le esegue chiamando i tool del tuo sistema.
 //
 // Architettura (slide 12 del prof): Memory → Planner → Exec(Tools) → Replan?
-// Pattern di esecuzione: ReAct (Thought / Action / Action Input / Observation),
-// preso dal lab8.
+// Pattern di esecuzione: Planning Decoupled + State-Based Context.
+//   FASE 1  generatePlan()   → 1 sola chiamata LLM: produce la sequenza di step
+//   FASE 2  execution loop    → esegue gli step con SOLO tool call (0 LLM)
+//   FASE 3  reflectOnError()  → chiamata LLM opzionale, SOLO su errore di uno step
+// Niente accumulo di history: l'array `messages` resta [system, user] (2 elementi)
+// e uno `state` mutabile traccia il progresso → context costante (~400-600 token).
 //
 // SCOPE attuale: L1 + L2 (no coordinamento BDI ↔ LLM).
 //   - Solo lettura della chat per ricevere missioni (nessun handshake/hello)
@@ -467,116 +471,545 @@ For calculation missions, the flow is exactly:
 `.trim();
 }
 
+// extractAction: parser dello stile ReAct (Action / Action Input). Non più
+// usato dal loop principale (sostituito da Planning Decoupled), ma mantenuto
+// per compatibilità / debug di eventuali output in vecchio formato.
 function extractAction(text) {
     const a  = text.match(/^Action:\s*(.+)$/im);
     const ai = text.match(/^Action Input:\s*(.+)$/im);
     if (!a) return null;
     return { action: a[1].trim(), input: ai ? ai[1].trim() : 'none' };
 }
-function extractFinal(text) {
-    const m = text.match(/^Final Answer:\s*([\s\S]*)$/im);
+
+/**
+ * Estrae il final answer dal testo dell'LLM. Cerca "FINAL ANSWER: ...".
+ * @returns {string | null}
+ */
+function extractFinalAnswer(text) {
+    const m = String(text || '').match(/^\s*FINAL ANSWER:\s*(.+)$/im);
     return m ? m[1].trim() : null;
 }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. LOOP DI ESECUZIONE DI UNA MISSIONE  (ReAct con limite di iterazioni)
+// 4. PLANNING DECOUPLED + STATE-BASED CONTEXT
+//
+// Invece del loop ReAct (che accumulava tutta la history nei `messages` ad ogni
+// step → context da 150 a 2100 token), separiamo PLANNING ed EXECUTION:
+//   FASE 1  generatePlan()    → 1 sola chiamata LLM, produce la sequenza di step
+//   FASE 2  execution loop     → esegue gli step con SOLO tool call (0 LLM)
+//   FASE 3  reflectOnError()   → chiamata LLM opzionale, SOLO quando uno step
+//                                fallisce, per correggere il piano da lì in poi
+// Il context resta costante (~400-600 token): l'array `messages` è sempre di 2
+// elementi [system, user] e lo `state` mutabile traccia il progresso.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MAX_STEPS = 8;
+// Quante volte al massimo proviamo a correggere il piano prima di arrenderci.
+// Meglio fallire rapidamente che restare appesi a riflettere all'infinito.
+const MAX_REFLECTIONS = 3;
+
+
+// ── Prompt per il PLANNER (generatePlan) ─────────────────────────────────────
+function buildPlannerPrompt() {
+    return `
+You are the planner of a Deliveroo LLM agent. Given a mission in natural language
+and the current world state, break the mission into a SHORT sequence of concrete
+steps. Output ONLY the plan — no reasoning, no extra prose.
+
+Each step has the form "action: target". Valid actions:
+- inspect: (target: none) re-read the current world state
+- calculate: (target: a math expression, e.g. "5*5") evaluate arithmetic
+- go_pick_up: (target: "(x,y)" of a parcel, or "nearest") move to a parcel and pick it up
+- go_deliver: (target: "(x,y)" of a delivery point, or "nearest") move to a delivery point and drop carried parcels
+- navigate_to: (target: "(x,y)") just move to a tile
+- set_rule: (target: a JSON object) install a persistent Level-2 rule
+- answer: (target: the text to send) reply to the agent that gave the mission
+
+WORLD MODEL:
+- delivery_points: tiles where you DROP parcels to score. Parcels do NOT spawn here.
+- top_spawn_tiles: tiles where parcels appear. To FIND parcels, go to one of these.
+- visible_free_parcels: parcels currently on the ground that you can see.
+
+MISSION FAMILIES — pick the right one based on the mission text:
+1) QUESTION / CALCULATION ("Calcola 5*5", "What is the capital of Italy?"). The
+   giver only sees what you send via answer. For arithmetic, add a calculate step
+   FIRST, then an answer step whose target is "result" (the computed value is sent
+   automatically). For factual questions, a single answer step with the answer text.
+     e.g.  1. calculate: 5*5
+           2. answer: result
+     e.g.  1. answer: Rome
+2) ATOMIC ACTION ("pick up the parcel at (2,3) and deliver it", "move to (4,7)",
+   "go to one of (1,2)/(3,4) for a bonus"). Use go_pick_up / go_deliver /
+   navigate_to with explicit coordinates taken from the mission or the world state.
+   When several candidate coordinates are offered, choose the one closest to your
+   current position. No answer needed.
+     e.g.  1. go_pick_up: (2,3)
+           2. go_deliver: nearest
+3) PERSISTENT RULE — Level 2 ("deliver stacks of 3", "don't cross tile (5,7)",
+   "every time you deliver in (2,2) you get 0 pts", "reward > 10 gives nothing").
+   Translate into ONE set_rule step per rule. Supported JSON:
+     {"type":"stack_size","n":3}
+     {"type":"forbidden_tile","x":5,"y":7}
+     {"type":"zero_delivery","x":2,"y":2}
+     {"type":"bonus_delivery","x":3,"y":3}
+     {"type":"max_parcel_reward","value":10}
+     e.g.  1. set_rule: {"type":"stack_size","n":3}
+
+If the mission references parcels you cannot currently see in visible_free_parcels,
+add a navigate_to a top_spawn_tile step before go_pick_up, or use "go_pick_up: nearest".
+
+Output EXACTLY this format and nothing else:
+PLAN:
+1. action: target
+2. action: target
+FINAL ANSWER: one short line summarising the plan
+`.trim();
+}
+
+
+// ── Prompt per il REPLANNER (reflectOnError) ─────────────────────────────────
+function buildReplannerPrompt() {
+    return `
+You are the replanner of a Deliveroo LLM agent. One step of the current plan
+failed. Produce a REVISED plan for the REMAINING steps only (from the failed step
+onwards). Do NOT repeat the steps that already succeeded.
+
+Use the same actions and JSON rule formats as the planner:
+inspect, calculate, go_pick_up, go_deliver, navigate_to, set_rule, answer.
+
+Common fixes:
+- go_pick_up failed with "no parcel": navigate_to a top_spawn_tile, then
+  "go_pick_up: nearest" (a parcel may enter observation range).
+- navigate_to "irraggiungibile": that tile is a wall — choose a different
+  reachable target, or answer that the destination cannot be reached.
+- the target had no coordinates: read the world state and use real coordinates.
+
+Output EXACTLY this format and nothing else:
+PLAN:
+1. action: target
+2. action: target
+FINAL ANSWER: one short line
+`.trim();
+}
+
+
+// ── Parsing del piano ────────────────────────────────────────────────────────
 
 /**
- * Esegue una missione con il loop ReAct.
+ * Estrae il piano dal testo dell'LLM. Tollerante alle variazioni di formato:
+ * accetta "1. action: target", "1) action: target", "Step 1: action: target",
+ * "- action: target". Isola la sezione dopo un header "PLAN:" (se presente) e
+ * ignora la coda "FINAL ANSWER: ...".
+ * @returns {Array<{action: string, target: string, description: string}>}
+ */
+function parsePlan(llmText, startIndex = 0) {  // eslint-disable-line no-unused-vars
+    const text = String(llmText || '');
+
+    // Isola il corpo del piano: preferisci ciò che segue un header "PLAN..:".
+    let body = text;
+    const planMatch = text.match(/PLAN[^\n]*\n([\s\S]*?)(?:\n\s*FINAL ANSWER:|$)/i);
+    if (planMatch) {
+        body = planMatch[1];
+    } else {
+        const fa = text.search(/\n\s*FINAL ANSWER:/i);
+        if (fa >= 0) body = text.slice(0, fa);
+    }
+
+    const steps = [];
+    for (const rawLine of body.split('\n')) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        // "1. ...", "1) ...", "1: ...", "Step 1 - ...", oppure bullet "- ..."/"* ..."
+        const m = line.match(/^(?:step\s*)?\d+\s*[.):\-]\s*(.+)$/i)
+               || line.match(/^[-*]\s+(.+)$/);
+        if (!m) continue;
+        const step = parseStepContent(m[1].trim());
+        if (step) steps.push(step);
+    }
+    return steps;
+}
+
+// Spezza "action: target" (o "action target") in {action, target, description}.
+function parseStepContent(content) {
+    let action, target;
+    const colon = content.indexOf(':');
+    if (colon >= 0) {
+        action = content.slice(0, colon).trim();
+        target = content.slice(colon + 1).trim();
+    } else {
+        const sp = content.search(/\s/);
+        if (sp >= 0) { action = content.slice(0, sp); target = content.slice(sp + 1).trim(); }
+        else         { action = content; target = ''; }
+    }
+    if (!action) return null;
+    return { action, target, description: content };
+}
+
+// Normalizza il nome azione: minuscolo, separatori → "_", via i caratteri di
+// markdown (** `` ecc.). "Go Pick Up" / "**go_pick_up**" → "go_pick_up".
+function normalizeAction(a) {
+    return String(a).trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+}
+
+// Il target di un passo "answer" è un segnaposto che rimanda al risultato di un
+// calculate precedente? (così non "inventiamo" il numero: lo prendiamo dal tool)
+function isResultPlaceholder(t) {
+    const s = String(t).trim().toLowerCase();
+    return s === '' || /^<.*>$/.test(s) || /\b(result|risultato|computed|above|previous)\b/.test(s);
+}
+
+// Estrae "(x,y)" da una stringa target. Null se non ci sono coordinate.
+function parseCoords(s) {
+    const m = String(s).match(/\(?\s*(-?\d+)\s*,\s*(-?\d+)\s*\)?/);
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+}
+
+// Pacco libero visibile più vicino a me (null se non se ne vedono).
+function nearestFreeParcel(beliefs) {
+    const free = [...(beliefs.parcels?.values() ?? [])].filter(p => !p.carriedBy);
+    if (free.length === 0) return null;
+    const me = beliefs.me ?? { x: 0, y: 0 };
+    free.sort((a, b) =>
+        (Math.abs(a.x - me.x) + Math.abs(a.y - me.y)) -
+        (Math.abs(b.x - me.x) + Math.abs(b.y - me.y)));
+    return free[0];
+}
+
+// Delivery point più vicino a me (null se non ne conosco).
+function nearestDelivery(beliefs) {
+    const dps = beliefs.deliveryPoints ?? [];
+    if (dps.length === 0) return null;
+    const me = beliefs.me ?? { x: 0, y: 0 };
+    let best = null, bestD = Infinity;
+    for (const d of dps) {
+        const dist = Math.abs(d.x - me.x) + Math.abs(d.y - me.y);
+        if (dist < bestD) { best = d; bestD = dist; }
+    }
+    return best;
+}
+
+
+// ── FASE 1: PLANNING ─────────────────────────────────────────────────────────
+
+/**
+ * Chiama l'LLM una sola volta per generare il piano.
+ * @param {string} missionText
+ * @param {object} beliefs
+ * @param {object} tools
+ * @returns {Promise<{steps: Array<{action, target, description}>, reasoning: string}>}
+ */
+async function generatePlan(missionText, beliefs, tools) {
+    const world = await tools.inspect();   // snapshotWorld(beliefs, activeRules)
+    const out = await callModel([
+        { role: 'system', content: buildPlannerPrompt() },
+        { role: 'user',   content: `Mission: ${missionText}\n\nCurrent world state:\n${world}` },
+    ], { temperature: 0 });
+
+    console.log(`[LLM-PLAN] risposta modello:\n${out}`);
+    const steps = parsePlan(out);
+    return { steps, reasoning: extractFinalAnswer(out) ?? '' };
+}
+
+
+// ── FASE 2: EXECUTION DI UN SINGOLO STEP (nessuna chiamata LLM) ───────────────
+
+/**
+ * Esegue un singolo step del piano traducendolo in una (o più) tool call.
+ * Non chiama l'LLM.
+ * @param {object} step - {action, target}
+ * @param {object} ctx
+ * @returns {Promise<{success: boolean, outcome?: string, error?: string}>}
+ */
+async function executeStep(step, ctx) {
+    const tools   = makeTools(ctx);
+    const beliefs = ctx.beliefs;
+    const action  = normalizeAction(step.action);
+    const target  = step.target ?? '';
+
+    const ok   = (outcome) => ({ success: true,  outcome: String(outcome) });
+    const fail = (error)   => ({ success: false, error:   String(error) });
+    const isErr = (s) => String(s).startsWith('Error');
+
+    try {
+        switch (action) {
+            case 'inspect':
+                return ok(await tools.inspect());
+
+            case 'calculate': {
+                const out = await tools.calculate(target);
+                if (isErr(out)) return fail(out);
+                const m = String(out).match(/Result:\s*(.+)/);
+                if (m) ctx._lastCalcResult = m[1].trim();   // per l'eventuale answer
+                return ok(out);
+            }
+
+            case 'answer': {
+                const text = (ctx._lastCalcResult != null && isResultPlaceholder(target))
+                    ? ctx._lastCalcResult
+                    : target;
+                const out = await tools.answer(text);
+                return isErr(out) ? fail(out) : ok(out);
+            }
+
+            case 'set_rule': {
+                const out = await tools.set_rule(target);
+                return isErr(out) ? fail(out) : ok(out);
+            }
+
+            case 'navigate_to':
+            case 'navigate':
+            case 'move':
+            case 'go':
+            case 'go_to': {
+                const c = parseCoords(target);
+                if (!c) return fail(`target senza coordinate valide: "${target}"`);
+                const out = await tools.navigate_to(`${c.x},${c.y}`);
+                return isErr(out) ? fail(out) : ok(out);
+            }
+
+            case 'pickup':
+                return ok(await tools.pickup());
+
+            case 'putdown':
+            case 'drop':
+                return ok(await tools.putdown());
+
+            case 'go_pick_up':
+            case 'pick_up':
+            case 'pick': {
+                let c = parseCoords(target);
+                if (!c) {
+                    const p = nearestFreeParcel(beliefs);
+                    if (!p) return fail('nessun pacco libero visibile da raccogliere');
+                    c = { x: Math.round(p.x), y: Math.round(p.y) };
+                }
+                const nav = await tools.navigate_to(`${c.x},${c.y}`);
+                if (isErr(nav)) return fail(nav);
+                const pick = await tools.pickup();
+                if (/Nessun pacco/i.test(pick)) return fail(`${nav}; ma ${pick}`);
+                return ok(`${nav}; ${pick}`);
+            }
+
+            case 'go_deliver':
+            case 'deliver': {
+                let c = parseCoords(target);
+                if (!c) {
+                    const d = nearestDelivery(beliefs);
+                    if (!d) return fail('nessuna delivery tile nota');
+                    c = { x: d.x, y: d.y };
+                }
+                const nav = await tools.navigate_to(`${c.x},${c.y}`);
+                if (isErr(nav)) return fail(nav);
+                const drop = await tools.putdown();
+                if (/Niente da consegnare/i.test(drop)) return fail(`${nav}; ma ${drop}`);
+                return ok(`${nav}; ${drop}`);
+            }
+
+            default: {
+                // Fallback: il modello potrebbe aver usato direttamente il nome
+                // di un tool (es. "calculate", "nearest_delivery", "list_rules").
+                if (typeof tools[action] === 'function') {
+                    const out = await tools[action](target);
+                    return isErr(out) ? fail(out) : ok(out);
+                }
+                return fail(`azione sconosciuta: "${step.action}"`);
+            }
+        }
+    } catch (e) {
+        return fail(e.message);
+    }
+}
+
+
+// ── FASE 3: REFLECTION (opzionale, solo su errore) ───────────────────────────
+
+/**
+ * Chiama l'LLM per correggere il piano quando uno step fallisce. Restituisce il
+ * piano RIVISTO per i passi rimanenti (dal passo fallito in poi), senza
+ * rigenerare quelli già completati.
+ * @param {string} missionText
+ * @param {{steps: Array}} originalPlan
+ * @param {number} failedStepIndex   indice 0-based del passo fallito
+ * @param {string} error
+ * @param {object} beliefs
+ * @param {object} tools
+ * @returns {Promise<{steps: Array, reasoning: string}>}
+ */
+async function reflectOnError(missionText, originalPlan, failedStepIndex, error, beliefs, tools) {
+    const world = await tools.inspect();
+    const originalPlanText = originalPlan.steps
+        .map((s, idx) => `${idx + 1}. ${s.action}: ${s.target}`)
+        .join('\n');
+
+    const user = [
+        `Mission: ${missionText}`,
+        '',
+        'Original plan:',
+        originalPlanText,
+        '',
+        `Error at step ${failedStepIndex + 1}: ${error}`,
+        '',
+        'Current world state:',
+        world,
+        '',
+        `Generate a REVISED plan from step ${failedStepIndex + 1} onwards. Do not regenerate the steps that already succeeded (1..${failedStepIndex}).`,
+    ].join('\n');
+
+    const out = await callModel([
+        { role: 'system', content: buildReplannerPrompt() },
+        { role: 'user',   content: user },
+    ], { temperature: 0 });
+
+    console.log(`[LLM-REFLECTION] risposta modello:\n${out}`);
+    const steps = parsePlan(out, failedStepIndex);
+    return { steps, reasoning: extractFinalAnswer(out) ?? '' };
+}
+
+
+// ── User message STATEFUL (si aggiorna in-place, non accumula history) ────────
+
+/**
+ * Costruisce il messaggio user statico che traccia il progresso. Si aggiorna
+ * in-place ad ogni step (non si aggiungono nuovi elementi all'array messages),
+ * così il context resta costante.
+ * @param {string} missionText
+ * @param {{lastAction, lastOutcome, completedSteps, totalSteps}} state
+ * @param {object} beliefs
+ * @returns {string}
+ */
+function buildStatefulUserMessage(missionText, state, beliefs) {
+    return [
+        `Mission: ${missionText}`,
+        '',
+        '[Current World State]',
+        snapshotWorld(beliefs),
+        '',
+        '[Last Action & Outcome]',
+        `Action: ${state.lastAction ?? '(None yet)'}`,
+        `Outcome: ${state.lastOutcome ?? ''}`,
+        '',
+        '[Progress]',
+        `Steps: ${state.completedSteps} / ${state.totalSteps ?? '?'}`,
+    ].join('\n');
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RUN MISSION — orchestrazione Planning → Execution → (Reflection) → Completion
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Esegue una missione col pattern Planning Decoupled + State-Based Context.
  * @param {string} missionText
  * @param {object} ctx        contesto con { socket, beliefs, deps, lastSender }
  * @param {AbortSignal} [signal]   se .aborted=true la missione viene interrotta
- *                                 fra uno step e l'altro (la chiamata LLM in corso
- *                                 viene comunque attesa fino alla fine)
+ *                                 tra uno step e l'altro
  */
 async function runMission(missionText, ctx, signal = null) {
     const tools  = makeTools(ctx);
     const prompt = buildPrompt(Object.keys(tools));
 
-    const messages = [
-        { role: 'system', content: prompt },
-        { role: 'user',   content: `Mission: ${missionText}` },
-    ];
+    // Risultato dell'ultimo calculate, condiviso tra gli step (per "answer: result").
+    ctx._lastCalcResult = null;
 
-    // Tiene traccia dell'ultimo risultato calculate, per auto-rispondere se il
-    // passo successivo va in timeout (es. il modello risponde lentamente e il
-    // secondo turno LLM scade prima che possa chiamare answer()).
-    let lastCalculateResult = null;
+    // STATE TRACKER — NON viene aggiunto ai messages, traccia solo il progresso.
+    const state = {
+        lastAction:     null,
+        lastOutcome:    null,
+        completedSteps: 0,
+        totalSteps:     null,
+    };
 
-    for (let step = 0; step < MAX_STEPS; step++) {
-        if (signal?.aborted) {
-            console.log(`[LLM] missione interrotta dalla queue`);
-            return null;
-        }
-
-        let out;
-        try {
-            out = await callModel(messages, { temperature: 0 });
-        } catch (e) {
-            // Se il timeout scatta DOPO che abbiamo già calcolato un risultato,
-            // lo inviamo direttamente in chat senza aspettare un altro turno LLM.
-            if (lastCalculateResult !== null) {
-                console.warn(`[LLM] timeout al passo ${step + 1} — auto-rispondo con il risultato già calcolato`);
-                const tools = makeTools(ctx);
-                const obs = await tools.answer(String(lastCalculateResult));
-                console.log(`[LLM] answer(${lastCalculateResult}) → ${obs}`);
-                return `Auto-risposta inviata: ${lastCalculateResult}`;
-            }
-            throw e;
-        }
-        messages.push({ role: 'assistant', content: out });
-
-        console.log(`[LLM] step ${step + 1} ──────────`);
-        console.log(out);
-
-        if (signal?.aborted) {
-            console.log(`[LLM] missione interrotta dopo lo step ${step + 1}`);
-            return null;
-        }
-
-        const final = extractFinal(out);
-        if (final) {
-            console.log(`[LLM] Missione completata: ${final}`);
-            return final;
-        }
-
-        const act = extractAction(out);
-        if (!act) {
-            console.warn('[LLM] formato non valido — chiedo di riprovare');
-            messages.push({ role: 'user', content: 'Invalid format. Use Action or Final Answer.' });
-            continue;
-        }
-
-        const tool = tools[act.action];
-        let observation;
-        if (!tool) {
-            observation = `Error: tool sconosciuto "${act.action}"`;
-        } else {
-            try {
-                observation = await tool(act.input === 'none' ? '' : act.input, ctx);
-            } catch (e) {
-                observation = `Error: ${e.message}`;
-            }
-        }
-
-        // Memorizza il risultato di calculate per poterlo usare come auto-risposta
-        // in caso di timeout al passo successivo (es. il modello non riesce a
-        // completare il secondo turno e non chiama answer()).
-        if (act.action === 'calculate' && observation && !observation.startsWith('Error')) {
-            const m = observation.match(/Result:\s*(.+)/);
-            if (m) lastCalculateResult = m[1].trim();
-        }
-
-        console.log(`[LLM] ${act.action}(${act.input}) → ${observation}`);
-        messages.push({ role: 'user', content: `Observation: ${observation}` });
+    if (signal?.aborted) {
+        console.log('[LLM] Interruzione prima del planning');
+        return null;
     }
 
-    console.warn('[LLM] Limite iterazioni raggiunto senza Final Answer');
-    return null;
+    // FASE 1: PLANNING (1 sola chiamata LLM)
+    let plan;
+    try {
+        plan = await generatePlan(missionText, ctx.beliefs, tools);
+        state.totalSteps = plan.steps.length;
+        console.log(`[LLM] Piano generato: ${plan.steps.length} steps`);
+    } catch (e) {
+        console.error('[LLM-PLAN] Errore:', e.message);
+        return null;
+    }
+    if (plan.steps.length === 0) {
+        console.warn('[LLM] Piano vuoto — nessuno step eseguibile');
+        return null;
+    }
+
+    // MESSAGES ARRAY — SEMPRE 2 elementi [system, user], state-based.
+    const messages = [
+        { role: 'system', content: prompt },
+        { role: 'user',   content: buildStatefulUserMessage(missionText, state, ctx.beliefs) },
+    ];
+
+    // FASE 2: EXECUTION LOOP (nessuna chiamata LLM, solo tool call).
+    // Indice esplicito invece di for...of: così la reflection può rimpiazzare
+    // gli step rimanenti e si può ri-tentare dallo stesso indice.
+    let reflections = 0;
+    let i = 0;
+    while (i < plan.steps.length) {
+        if (signal?.aborted) {
+            console.log('[LLM] Interruzione durante execution');
+            return null;
+        }
+
+        const step = plan.steps[i];
+        console.log(`[LLM-EXEC] Step ${i + 1}/${plan.steps.length}: ${step.action} → ${step.target}`);
+
+        let outcome;
+        try {
+            outcome = await executeStep(step, ctx);
+        } catch (e) {
+            outcome = { success: false, error: e.message };
+        }
+
+        if (!outcome.success) {
+            console.log(`[LLM-EXEC] ✗ Errore: ${outcome.error}`);
+
+            if (reflections >= MAX_REFLECTIONS) {
+                console.error(`[LLM-REFLECTION] budget esaurito (${MAX_REFLECTIONS}) — missione fallita`);
+                return null;
+            }
+            reflections++;
+
+            // FASE 3: REFLECTION — correggi il piano dal passo fallito in poi.
+            let revised;
+            try {
+                revised = await reflectOnError(
+                    missionText, plan, i, outcome.error, ctx.beliefs, tools
+                );
+            } catch (e) {
+                console.error('[LLM-REFLECTION] Errore:', e.message);
+                return null;
+            }
+            if (revised.steps.length === 0) {
+                console.error('[LLM-REFLECTION] piano rivisto vuoto — missione fallita');
+                return null;
+            }
+
+            // Sostituisci gli step da i in poi col piano rivisto, tieni i completati.
+            plan = { ...plan, steps: [...plan.steps.slice(0, i), ...revised.steps] };
+            state.totalSteps = plan.steps.length;
+            console.log(`[LLM-REFLECTION] Piano corretto: ${plan.steps.length} steps totali`);
+            continue;   // ri-tenta dallo stesso indice col nuovo step
+        }
+
+        // Success: aggiorna lo state e il messaggio user in-place (no history).
+        state.lastAction     = `${step.action}(${step.target})`;
+        state.lastOutcome    = outcome.outcome;
+        state.completedSteps = i + 1;
+        messages[1].content  = buildStatefulUserMessage(missionText, state, ctx.beliefs);
+
+        console.log(`[LLM-EXEC] ✓ Completato: ${outcome.outcome}`);
+        i++;
+    }
+
+    console.log(`[LLM] ✓ Missione completata: ${state.completedSteps} steps eseguiti`);
+    return `Missione completata: ${state.completedSteps}/${state.totalSteps} steps`;
 }
 
 
@@ -660,3 +1093,14 @@ export function startLlmAgent(socket, beliefs, deps) {
 
     console.log('[LLM] Avviato — coda missioni attiva, in ascolto chat');
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Export interni — utili per test e debug. Non cambiano il comportamento del
+// modulo (startLlmAgent resta l'entry point usato da llm_main.js).
+// ─────────────────────────────────────────────────────────────────────────────
+export {
+    runMission, generatePlan, executeStep, reflectOnError,
+    buildStatefulUserMessage, parsePlan, extractFinalAnswer,
+    normalizeAction, parseCoords, snapshotWorld, makeTools,
+};
