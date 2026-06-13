@@ -56,6 +56,78 @@ export function updateMap(width, height, tiles) {
     //console.log(`[BELIEFS] spawnVisibility calcolata per ${beliefs.spawnVisibility.size} spawn tiles`);
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stampa "umana" della mappa con le COORDINATE, per capire il sistema di numeri.
+// Convenzione del server: origine (0,0) in BASSO a SINISTRA, x cresce verso
+// destra, y cresce verso l'alto → disegniamo le righe da ymax (in alto) a ymin.
+// Funzione PURA: ritorna una stringa multilinea (l'I/O lo fa il chiamante).
+// ─────────────────────────────────────────────────────────────────────────────
+export function formatMap(beliefs) {
+    const tiles = beliefs.mapTiles;
+    if (!tiles || tiles.size === 0) return '[MAP] mappa non ancora caricata';
+
+    let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+    for (const key of tiles.keys()) {
+        const [x, y] = key.split('_').map(Number);
+        if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+    }
+
+    const ARROWS = new Set(['→', '←', '↑', '↓']);
+    const symFor = (type) => {
+        switch (type) {
+            case '0':  return '#';   // muro
+            case '1':  return 'S';   // spawner pacchi
+            case '2':  return 'D';   // delivery
+            case '3':  return '·';   // calpestabile
+            case '4':  return 'B';   // base
+            case '5':
+            case '5!': return '▒';   // crate
+            default:   return ARROWS.has(type) ? type : '?';
+        }
+    };
+
+    const mex = Math.round(beliefs.me?.x ?? NaN);
+    const mey = Math.round(beliefs.me?.y ?? NaN);
+
+    const yLabelW = Math.max(String(ymin).length, String(ymax).length);
+    const margin  = ' '.repeat(yLabelW + 1);
+    const padY    = (y) => String(y).padStart(yLabelW, ' ');
+
+    const lines = [];
+    lines.push(`[MAP] dimensioni ${xmax - xmin + 1}×${ymax - ymin + 1} — x ${xmin}..${xmax}, y ${ymin}..${ymax} — ${tiles.size} tile — direzionale=${!!beliefs.isDirectionalMap}`);
+    lines.push(`[MAP] origine (0,0) in BASSO a SINISTRA · x → destra · y ↑ alto`);
+    lines.push(`[MAP] legenda: @=tu  D=delivery  S=spawn pacchi  #=muro  ·=calpestabile  B=base  ▒=crate  (vuoto=ignoto)`);
+
+    // Intestazione X: riga delle decine (se serve) + riga delle unità, allineate.
+    if (xmax >= 10) {
+        let tens = '';
+        for (let x = xmin; x <= xmax; x++) tens += (x >= 10 ? String(Math.floor(x / 10) % 10) : ' ');
+        lines.push(margin + tens);
+    }
+    let units = '';
+    for (let x = xmin; x <= xmax; x++) units += String(((x % 10) + 10) % 10);
+    lines.push(margin + units);
+
+    // Righe dall'ALTO (ymax) al BASSO (ymin), così la stampa rispetta il "su/giù".
+    for (let y = ymax; y >= ymin; y--) {
+        let row = '';
+        for (let x = xmin; x <= xmax; x++) {
+            if (x === mex && y === mey) { row += '@'; continue; }
+            const t = tiles.get(`${x}_${y}`);
+            row += t ? symFor(t.type) : ' ';
+        }
+        lines.push(`${padY(y)} ${row}`);
+    }
+
+    const dps = beliefs.deliveryPoints ?? [];
+    lines.push(`[MAP] tu @ (${mex},${mey})`);
+    lines.push(`[MAP] delivery_points (${dps.length}): ${dps.map(d => `(${d.x},${d.y})`).join(' ') || 'nessuno'}`);
+
+    return lines.join('\n');
+}
+
 export function updateSensing(sensing) {
     const now    = Date.now();
     const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
