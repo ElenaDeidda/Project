@@ -56,7 +56,24 @@ socket.onYou(me => {
     beliefs.me.x        = me.x;
     beliefs.me.y        = me.y;
     beliefs.me.score    = me.score;
+    tracePosition();
 });
+
+// ─── Tracer di posizione: mostra CHI muove l'agente ad OGNI cambio di cella ──
+// onYou riflette la posizione AUTORITATIVA del server, quindi ogni riga [POS] è
+// un movimento reale. `driver` dice chi sta guidando in quel momento:
+//   LLM-MISSION → siamo dentro una mission (bdiPaused=true)
+//   BDI         → sta giocando il loop BDI normale
+// Così si vede, p.es., che dopo "arrivato a (1,1)" è il BDI a riportarlo via.
+// [POS] NON è filtrato; per silenziarlo aggiungi POS a LLM_LOG_MUTE.
+let _lastPosKey = null;
+function tracePosition() {
+    const k = `${Math.round(beliefs.me.x)}_${Math.round(beliefs.me.y)}`;
+    if (k === _lastPosKey) return;
+    _lastPosKey = k;
+    const driver = bdiPaused ? 'LLM-MISSION' : 'BDI';
+    console.log(`[POS] @(${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)}) driver=${driver} score=${beliefs.me.score ?? '?'}`);
+}
 
 // Loop BDI: ad ogni sensing rideliberiamo le options e pushiamo l'intenzione.
 // Stesso pattern di main.js, ma con un interruttore `bdiPaused` controllato
