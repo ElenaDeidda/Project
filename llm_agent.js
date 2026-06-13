@@ -20,6 +20,7 @@
 
 import OpenAI from 'openai';
 import { initQueue, enqueue } from './mission_queue.js';
+import { parseIntervalMs } from './basic_functions.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM — LiteLLM UniTN (come lab8)
@@ -697,6 +698,15 @@ function nearestDelivery(beliefs) {
 }
 
 
+// ── ACQUIRE PERSISTENTE: parametri (allineati al patrol del BDI in options.js) ─
+const ACQUIRE_WAIT_FACTOR   = 2;        // attesa per spawn tile = factor × intervallo di generazione
+const ACQUIRE_WAIT_FALLBACK = 4000;     // ms, se l'intervallo di generazione non è leggibile
+const ACQUIRE_POLL_MS       = 250;      // ogni quanto ri-controllo beliefs.parcels mentre attendo
+// Tetto massimo complessivo della ricerca. 0 = nessun tetto: cerca finché non
+// trova un pacco o finché la coda interrompe la missione (default voluto dalla
+// missione "portala a termine a prescindere"). Override con ACQUIRE_MAX_MS.
+const ACQUIRE_MAX_MS        = Number(process.env.ACQUIRE_MAX_MS) || 0;
+
 // Distanza di osservazione corrente (default 5 come da SDK).
 function obsDistOf(beliefs) {
     return beliefs.config?.GAME?.player?.observation_distance ?? 5;
@@ -731,6 +741,138 @@ function bestSpawnTile(beliefs) {
         if (score > bestScore) { best = { x, y }; bestScore = score; }
     }
     return best;
+}
+
+// Tutte le spawn tile ordinate best-first (stesso score di bestSpawnTile). Serve
+// per RUOTARE tra le tile invece di martellare sempre la stessa quando è vuota.
+function rankedSpawnTiles(beliefs) {
+    const spawnVis = beliefs.spawnVisibility ?? new Map();
+    const me = beliefs.me ?? { x: 0, y: 0 };
+    const tiles = [];
+    for (const [key, vis] of spawnVis.entries()) {
+        const [x, y] = key.split('_').map(Number);
+        const score = vis * 10 - (Math.abs(x - me.x) + Math.abs(y - me.y));
+        tiles.push({ x, y, key, score });
+    }
+    tiles.sort((a, b) => b.score - a.score);
+    return tiles;
+}
+
+// Finestra d'attesa su una spawn tile prima di ruotare: 2× l'intervallo di
+// generazione pacchi (come patrolTimeout() del BDI), altrimenti il fallback.
+// parseIntervalMs ritorna Infinity per 'infinite'/non leggibile → fallback.
+function acquireWaitMs(beliefs) {
+    const p  = beliefs.config?.GAME?.parcels;
+    const ms = parseIntervalMs(p?.generation_event ?? p?.generation_time);
+    return Number.isFinite(ms) ? ms * ACQUIRE_WAIT_FACTOR : ACQUIRE_WAIT_FALLBACK;
+}
+
+// Navigazione interrompibile (shouldStop legato al signal di abort). Ritorna
+// true SOLO se è davvero arrivato a (x,y) (riusa l'idea di verifica del tool).
+async function navigateInterruptible(ctx, x, y, signal) {
+    const { socket, beliefs, deps } = ctx;
+    const res = await deps.navigateTo(
+        beliefs.me, { x, y }, socket, beliefs.mapTiles, () => signal?.aborted === true
+    );
+    const here = { x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y) };
+    return res === 'reached' && here.x === x && here.y === y;
+}
+
+// Sleep che si risveglia SUBITO se arriva l'abort. Ritorna 'aborted' | 'timeout'.
+function abortableSleep(ms, signal) {
+    return new Promise((resolve) => {
+        if (signal?.aborted) return resolve('aborted');
+        const t = setTimeout(() => { cleanup(); resolve('timeout'); }, ms);
+        const onAbort = () => { cleanup(); resolve('aborted'); };
+        function cleanup() {
+            clearTimeout(t);
+            signal?.removeEventListener?.('abort', onAbort);
+        }
+        signal?.addEventListener?.('abort', onAbort, { once: true });
+    });
+}
+
+/**
+ * ACQUIRE PERSISTENTE (deterministico, NO LLM): assicura di avere un pacco a
+ * bordo. Cicla {prendi il visibile più vicino; se non c'è, vai sulla prossima
+ * spawn tile e ASPETTA che ne compaia uno, ruotando le tile} finché non porta
+ * un pacco. Esce solo su successo o su abort (o sul tetto ACQUIRE_MAX_MS se >0).
+ * @returns {Promise<{success:boolean, outcome?:string, error?:string}>}
+ */
+async function acquireParcelPersistent(ctx, signal) {
+    const beliefs   = ctx.beliefs;
+    const tag       = '[LLM-ACQUIRE]';
+    const carrying  = () => (beliefs.carriedParcels?.length ?? 0) > 0;
+    const aborted   = () => signal?.aborted === true;
+    const startedAt = Date.now();
+    const capped    = () => ACQUIRE_MAX_MS > 0 && (Date.now() - startedAt) >= ACQUIRE_MAX_MS;
+
+    if (carrying()) {
+        console.log(`${tag} ho già un pacco a bordo — acquisizione immediata`);
+        return { success: true, outcome: 'già carico' };
+    }
+
+    let sweep = new Set();   // tile già provate in questa "passata"
+    let cycle = 0;
+    while (true) {
+        if (aborted()) return { success: false, error: 'acquire interrotto (abort)' };
+        if (capped())  return { success: false, error: `acquire oltre ACQUIRE_MAX_MS=${ACQUIRE_MAX_MS}ms` };
+
+        // 1) C'è un pacco visibile? Vai a prenderlo.
+        const p = nearestVisibleParcel(beliefs);
+        if (p) {
+            const tx = Math.round(p.x), ty = Math.round(p.y);
+            console.log(`${tag} pacco visibile @ (${tx},${ty}) — vado a prenderlo`);
+            const arrived = await navigateInterruptible(ctx, tx, ty, signal);
+            if (carrying()) { console.log(`${tag} preso in transito ✓`); return { success: true, outcome: `acquisito @ (${tx},${ty})` }; }
+            if (aborted())  return { success: false, error: 'acquire interrotto (abort)' };
+            if (arrived) {
+                const r = await ctx.socket.emitPickup();
+                if (r && r.length) { console.log(`${tag} pickup ✓ (${r.length} pacchi)`); return { success: true, outcome: `acquisito @ (${tx},${ty})` }; }
+                console.log(`${tag} pacco sparito prima del pickup — continuo`);
+            } else {
+                console.log(`${tag} pacco non raggiunto — continuo`);
+            }
+            continue;
+        }
+
+        // 2) Nessun pacco visibile → ruota sulla prossima spawn tile e aspetta.
+        const tiles = rankedSpawnTiles(beliefs);
+        if (tiles.length === 0) {
+            console.log(`${tag} nessuna spawn tile nota — attendo e riprovo`);
+            if (await abortableSleep(acquireWaitMs(beliefs), signal) === 'aborted')
+                return { success: false, error: 'acquire interrotto (abort)' };
+            continue;
+        }
+        let next = tiles.find(t => !sweep.has(t.key));
+        if (!next) { sweep = new Set(); next = tiles[0]; cycle++; }   // passata finita → si rivisita
+        sweep.add(next.key);
+
+        console.log(`${tag} ciclo ${cycle}: vado su spawn tile (${next.x},${next.y}) [score=${next.score}]`);
+        const arrived = await navigateInterruptible(ctx, next.x, next.y, signal);
+        if (carrying()) { console.log(`${tag} preso in transito ✓`); return { success: true, outcome: 'acquisito in transito' }; }
+        if (aborted())  return { success: false, error: 'acquire interrotto (abort)' };
+        if (!arrived) {
+            // tile irraggiungibile ora: piccolo backoff per non ciclare a vuoto.
+            console.log(`${tag} spawn tile (${next.x},${next.y}) irraggiungibile — provo la prossima`);
+            if (await abortableSleep(ACQUIRE_POLL_MS, signal) === 'aborted')
+                return { success: false, error: 'acquire interrotto (abort)' };
+            continue;
+        }
+
+        // Sono sulla spawn tile: aspetto che compaia un pacco (poll), fino a waitMs.
+        const waitMs = acquireWaitMs(beliefs);
+        console.log(`${tag} su (${next.x},${next.y}), attendo uno spawn fino a ${waitMs}ms`);
+        const deadline = Date.now() + waitMs;
+        while (Date.now() < deadline) {
+            const slept = await abortableSleep(Math.min(ACQUIRE_POLL_MS, deadline - Date.now()), signal);
+            if (slept === 'aborted') return { success: false, error: 'acquire interrotto (abort)' };
+            if (carrying())                  { console.log(`${tag} pickup opportunistico in attesa ✓`); return { success: true, outcome: 'acquisito in attesa' }; }
+            if (nearestVisibleParcel(beliefs)) { console.log(`${tag} pacco apparso — vado a prenderlo`); break; }
+            if (capped()) return { success: false, error: `acquire oltre ACQUIRE_MAX_MS=${ACQUIRE_MAX_MS}ms` };
+        }
+        // torna in cima: o un pacco è apparso (gestito al punto 1), o ruoto tile.
+    }
 }
 
 
@@ -971,7 +1113,7 @@ async function generatePlan(missionText, beliefs, tools) {
  * @param {object} ctx
  * @returns {Promise<{success: boolean, outcome?: string, error?: string}>}
  */
-async function executeStep(step, ctx) {
+async function executeStep(step, ctx, signal = null) {
     const tools   = makeTools(ctx);
     const beliefs = ctx.beliefs;
     const action  = normalizeAction(step.action);
@@ -1029,23 +1171,15 @@ async function executeStep(step, ctx) {
             case 'acquire_parcel':
             case 'pick_up':
             case 'pick': {
-                let c = parseCoords(target);          // coordinate esplicite dal testo?
+                const c = parseCoords(target);        // coordinate esplicite dal testo?
                 if (!c) {
-                    // Target simbolico ("nearest"/vuoto/acquire): aggancia un pacco
-                    // VERO, non un ricordo. Solo pacchi attualmente visibili.
-                    let p = nearestVisibleParcel(beliefs);
-                    if (!p) {
-                        // Niente pacchi visibili → vai su una spawn tile e ri-osserva,
-                        // invece di inseguire fantasmi a vuoto.
-                        const s = bestSpawnTile(beliefs);
-                        if (!s) return fail('nessun pacco visibile e nessuna spawn tile nota');
-                        const navS = await tools.navigate_to(`${s.x},${s.y}`);
-                        if (isErr(navS)) return fail(`spawn tile irraggiungibile: ${navS}`);
-                        p = nearestVisibleParcel(beliefs);
-                        if (!p) return fail('nessun pacco trovato neanche dopo la spawn tile');
-                    }
-                    c = { x: Math.round(p.x), y: Math.round(p.y) };
+                    // Target simbolico ("nearest"/vuoto/acquire): ricerca PERSISTENTE
+                    // (ruota spawn tile + aspetta gli spawn) finché non porta un pacco
+                    // o finché la missione viene interrotta. Niente più resa al primo
+                    // controllo a vuoto.
+                    return await acquireParcelPersistent(ctx, signal);
                 }
+                // Coordinate esplicite: pacco SPECIFICO → prova-e-fallisci.
                 const nav = await tools.navigate_to(`${c.x},${c.y}`);
                 if (isErr(nav)) return fail(nav);
                 const pick = await tools.pickup();
@@ -1257,12 +1391,18 @@ async function runMission(missionText, ctx, signal = null) {
 
         let outcome;
         try {
-            outcome = await executeStep(step, ctx);
+            outcome = await executeStep(step, ctx, signal);
         } catch (e) {
             outcome = { success: false, error: e.message };
         }
 
         if (!outcome.success) {
+            // Se è stato l'abort della coda (es. durante un acquire persistente),
+            // esci pulito SENZA sprecare una reflection.
+            if (signal?.aborted) {
+                console.log('[LLM] Interruzione durante execution (acquire/step)');
+                return null;
+            }
             console.log(`[LLM-EXEC] ✗ Errore: ${outcome.error}`);
 
             if (reflections >= MAX_REFLECTIONS) {
@@ -1400,4 +1540,6 @@ export {
     normalizeAction, parseCoords, snapshotWorld, makeTools,
     understandMission, parseIntentJson, compileIntent,
     coordStr, nearestCandidate, nearestVisibleParcel, bestSpawnTile,
+    acquireParcelPersistent, rankedSpawnTiles, acquireWaitMs,
+    navigateInterruptible, abortableSleep,
 };
