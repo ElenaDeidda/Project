@@ -65,16 +65,21 @@ socket.onYou(me => {
 const agent = new IntentionRevision(socket);
 let bdiPaused = false;
 
+// Posizione (arrotondata) dell'agente, letta dai beliefs (= verità del server).
+const mePos = () => `(${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`;
+
 function bdiPause()  {
     if (bdiPaused) return;
     bdiPaused = true;
     agent.stop();
-    console.log(`[LLM-MAIN] ⏸  BDI in pausa — mission in esecuzione`);
+    // Posizione AL MOMENTO DELLO STOP. Se cambia tra qui e bdiResume() senza che
+    // sia stato l'LLM a muovere, vuol dire che il BDI NON si è davvero fermato.
+    console.log(`[LLM-MAIN] ⏸  BDI in pausa @ ${mePos()} — mission in esecuzione`);
 }
 function bdiResume() {
     if (!bdiPaused) return;
     bdiPaused = false;
-    console.log(`[LLM-MAIN] ▶  BDI ripreso — torno a giocare normalmente`);
+    console.log(`[LLM-MAIN] ▶  BDI ripreso @ ${mePos()} — torno a giocare normalmente`);
 }
 
 // Log "intelligente" della predicate corrente: stampa solo quando cambia,
