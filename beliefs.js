@@ -91,6 +91,10 @@ export function formatMap(beliefs) {
     const mex = Math.round(beliefs.me?.x ?? NaN);
     const mey = Math.round(beliefs.me?.y ?? NaN);
 
+    // Tile vietate (forbidden_tile): mostrate come 'X' anche se ora sono muri.
+    const forbidden = beliefs.forbiddenTiles instanceof Map ? beliefs.forbiddenTiles : null;
+    const isForbidden = (x, y) => !!forbidden && forbidden.has(`${x}_${y}`);
+
     const yLabelW = Math.max(String(ymin).length, String(ymax).length);
     const margin  = ' '.repeat(yLabelW + 1);
     const padY    = (y) => String(y).padStart(yLabelW, ' ');
@@ -98,7 +102,7 @@ export function formatMap(beliefs) {
     const lines = [];
     lines.push(`[MAP] dimensioni ${xmax - xmin + 1}×${ymax - ymin + 1} — x ${xmin}..${xmax}, y ${ymin}..${ymax} — ${tiles.size} tile — direzionale=${!!beliefs.isDirectionalMap}`);
     lines.push(`[MAP] origine (0,0) in BASSO a SINISTRA · x → destra · y ↑ alto`);
-    lines.push(`[MAP] legenda: @=tu  D=delivery  S=spawn pacchi  #=muro  ·=calpestabile  B=base  ▒=crate  (vuoto=ignoto)`);
+    lines.push(`[MAP] legenda: @=tu  X=vietata(muro)  D=delivery  S=spawn pacchi  #=muro  ·=calpestabile  B=base  ▒=crate  (vuoto=ignoto)`);
 
     // Intestazione X: riga delle decine (se serve) + riga delle unità, allineate.
     if (xmax >= 10) {
@@ -114,7 +118,8 @@ export function formatMap(beliefs) {
     for (let y = ymax; y >= ymin; y--) {
         let row = '';
         for (let x = xmin; x <= xmax; x++) {
-            if (x === mex && y === mey) { row += '@'; continue; }
+            if (x === mex && y === mey)  { row += '@'; continue; }
+            if (isForbidden(x, y))       { row += 'X'; continue; }
             const t = tiles.get(`${x}_${y}`);
             row += t ? symFor(t.type) : ' ';
         }
@@ -124,6 +129,9 @@ export function formatMap(beliefs) {
     const dps = beliefs.deliveryPoints ?? [];
     lines.push(`[MAP] tu @ (${mex},${mey})`);
     lines.push(`[MAP] delivery_points (${dps.length}): ${dps.map(d => `(${d.x},${d.y})`).join(' ') || 'nessuno'}`);
+    if (forbidden && forbidden.size > 0) {
+        lines.push(`[MAP] tile vietate (${forbidden.size}): ${[...forbidden.keys()].map(k => `(${k.replace('_', ',')})`).join(' ')}`);
+    }
 
     return lines.join('\n');
 }

@@ -91,23 +91,54 @@ function logPredicateIfChanged(predicate) {
 // Sono una struttura dati LOCALE al processo LLM. Il processo BDI non le vede
 // (ha il suo beliefs separato). Le regole influenzano:
 //   - applyRulesToBeliefs: post-processa beliefs DOPO updateSensing
-//     (es. aggiunge phantom blockers su forbidden_tile; rimuove pacchi troppo
+//     (es. marca le forbidden_tile come MURI nella mappa; rimuove pacchi troppo
 //      ricchi se max_parcel_reward)
 //   - applyRulesToPredicate: modifica la predicate prima di pushare l'intention
 //     (es. stack_size, zero_delivery, bonus_delivery)
 const activeRules = {};
 
+// Reprint coalescato della mappa quando cambiano le zone vietate (così non
+// stampiamo 6 mappe per 6 tile installate in fila).
+let _forbiddenReprintTimer = null;
+function scheduleForbiddenMapReprint() {
+    if (_forbiddenReprintTimer) clearTimeout(_forbiddenReprintTimer);
+    _forbiddenReprintTimer = setTimeout(() => {
+        _forbiddenReprintTimer = null;
+        console.log(formatMap(beliefs));
+    }, 800);
+}
+
 function applyRulesToBeliefs() {
-    // forbidden_tile: phantom agents bloccanti. La chiave "__forbidden_X_Y" è
-    // riconosciuta da snapshotWorld che li nasconde all'LLM.
-    if (Array.isArray(activeRules.forbiddenTiles)) {
-        for (const t of activeRules.forbiddenTiles) {
-            beliefs.agents.set(`__forbidden_${t.x}_${t.y}`, {
-                x: t.x, y: t.y, moving: false, direction: 'none',
-                targetX: t.x, targetY: t.y,
-            });
+    // forbidden_tile: MURO VERO. Marchiamo la tile come type '0' direttamente in
+    // mapTiles: l'A* la salta SEMPRE — anche se fosse la destinazione (i muri non
+    // hanno l'eccezione "goal" che invece avevano i vecchi phantom). È persistente
+    // (mapTiles non viene azzerata da updateSensing) e reversibile (clear_rule).
+    // beliefs.forbiddenTiles: "x_y" → tipo ORIGINALE (per il ripristino e per il
+    // disegno con 'X' sulla mappa).
+    beliefs.forbiddenTiles ??= new Map();
+    const want = new Set((activeRules.forbiddenTiles ?? []).map(t => `${t.x}_${t.y}`));
+    let changed = false;
+    // marca come muro le tile vietate
+    for (const t of activeRules.forbiddenTiles ?? []) {
+        const key  = `${t.x}_${t.y}`;
+        const tile = beliefs.mapTiles.get(key);
+        if (!beliefs.forbiddenTiles.has(key)) {
+            beliefs.forbiddenTiles.set(key, tile ? tile.type : '3');   // ricorda l'originale
+            changed = true;
+        }
+        if (tile && tile.type !== '0') tile.type = '0';                // → muro
+    }
+    // ripristina quelle non più vietate (es. clear_rule)
+    for (const [key, origType] of beliefs.forbiddenTiles) {
+        if (!want.has(key)) {
+            const tile = beliefs.mapTiles.get(key);
+            if (tile) tile.type = origType;
+            beliefs.forbiddenTiles.delete(key);
+            changed = true;
         }
     }
+    if (changed) scheduleForbiddenMapReprint();
+
     // max_parcel_reward: rimuovi dai beliefs i pacchi troppo cari così
     // options.js non li considera nemmeno candidati.
     if (typeof activeRules.maxParcelReward === 'number') {
@@ -317,8 +348,7 @@ setInterval(() => {
 
 // 5. Safety net del BDI: rideliberiamo ogni 200ms anche senza sensing nuovo
 //    (uguale a main.js). Tace quando bdiPaused. Applichiamo sempre le regole
-//    (anche ai beliefs: i phantom blockers vengono persi da updateAgents.clear,
-//    quindi se sono trascorsi sensing nel frattempo li reinseriamo).
+//    (forbidden_tile come muri, ecc.) così restano coerenti tra un sensing e l'altro.
 while (true) {
     if (!bdiPaused) {
         applyRulesToBeliefs();
