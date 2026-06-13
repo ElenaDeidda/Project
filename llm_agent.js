@@ -210,20 +210,33 @@ function makeTools(ctx) {
             const m = String(input).match(/(\d+)\s*,\s*(\d+)/);
             if (!m) return 'Error: coordinate non valide (usa "x,y")';
             const target = { x: Number(m[1]), y: Number(m[2]) };
+
+            // Posizione REALE di partenza (dal server, via beliefs.me).
+            const from = { x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y) };
+
             const res = await deps.navigateTo(
                 beliefs.me, target, socket, beliefs.mapTiles, () => false
             );
+
             // VERIFICA REALE: non fidarti del solo codice di ritorno. navigateTo
             // può restituire 'stopped' (interrotto) o arrivare solo in parte;
             // confrontiamo la posizione EFFETTIVA col target così non dichiariamo
             // un arrivo che non è avvenuto. Se non siamo arrivati → Error, che
             // fa scattare la reflection invece di un falso "completato".
-            const here = { x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y) };
+            const here    = { x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y) };
             const arrived = here.x === target.x && here.y === target.y;
+            const moved   = here.x !== from.x || here.y !== from.y;
+
+            // Diagnostica VISIBILE (tag [LLM-EXEC], non filtrato): mostra il
+            // movimento fisico effettivo from→here. Le coordinate vengono dai
+            // risultati di emitMove del server, quindi provano se l'agente si è
+            // davvero spostato (non è una stima dell'LLM).
+            console.log(`[LLM-EXEC] navigate_to (${target.x},${target.y}): da (${from.x},${from.y}) → (${here.x},${here.y}) | navigateTo=${res} | mosso=${moved} arrivato=${arrived}`);
+
             if (!arrived) {
-                return `Error: non arrivato a (${target.x},${target.y}) — sono a (${here.x},${here.y}) [navigateTo=${res}]`;
+                return `Error: non arrivato a (${target.x},${target.y}) — partito da (${from.x},${from.y}), ora a (${here.x},${here.y}) [navigateTo=${res}, mosso=${moved}]`;
             }
-            return `Arrivato a (${target.x},${target.y})`;
+            return `Arrivato a (${target.x},${target.y}) (partito da (${from.x},${from.y}))`;
         },
 
         // ── L1: pickup / putdown ─────────────────────────────────────────────
