@@ -21,8 +21,9 @@ const beliefs = {
     deliveryPoints: [{ x: 9, y: 9 }],
 };
 // stessa forma dei beliefs veri: coordinate nella chiave, valore solo {type}
-for (let x = 0; x < 10; x++)
-    for (let y = 0; y < 10; y++)
+// (mappa 25x25: copre anche coordinate "lontane" come (18,19))
+for (let x = 0; x < 25; x++)
+    for (let y = 0; y < 25; y++)
         beliefs.mapTiles.set(`${x}_${y}`, { type: '1' });
 
 const MISSIONS = [
@@ -37,6 +38,8 @@ const MISSIONS = [
     'Muoviti in (3,3) e guadagna -100 punti',
     'Move to (2,2) and you gain - 100 pts',
     'Go to one of (1,2), (8,1) or (5,6) for a one-time bonus of 20pts',
+    // ── caso reale: "Deliver ... una tantum" NON è una regola, è un drop ──
+    'Deliver a package in 18,19 to get a 1000pts bonus una tantum. Bonus is 1000pts. Coordinates are [{"x":18,"y":19}]',
     // ── L2 dal documento ──
     'Deliver stacks of exactly 3 parcels at a time to double the reward',
     'Deliver stacks of exactly 5 parcels at a time to get 0.3 of the standard reward',

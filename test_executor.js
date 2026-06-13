@@ -130,5 +130,23 @@ const r8 = await run('Move to coordinate (8,8) and you get +100pts');
 check('retry su blocco transitorio: arrivato a (8,8)',
       r8 !== null && Math.round(beliefs.me.x) === 8 && Math.round(beliefs.me.y) === 8);
 
+// ── 9. "Deliver a package in (x,y)" SENZA pacco → caccia su spawn tile ──────
+// Il caso che falliva: nessun pacco in mano né in vista. Ora va sulla spawn
+// tile ad alta visibilità e un pacco "compare" mentre è in attesa.
+beliefs.parcels.clear();
+beliefs.carriedParcels = [];
+beliefs.carrying = false;
+beliefs.spawnVisibility = new Map([['4_4', 12], ['1_1', 3]]);   // (4,4) miglior vedetta
+Object.assign(beliefs.me, { x: 0, y: 0 });
+// dopo 1s appare un pacco vicino alla spawn tile
+setTimeout(() => {
+    beliefs.parcels.set('late', { id: 'late', x: 4, y: 5, reward: 20, carriedBy: null });
+    console.log('   [TEST] un pacco compare a (4,5)');
+}, 1000);
+const r9 = await run('Deliver a package in 6,6 to get a 1000pts bonus una tantum');
+check('drop senza pacco: ne ha procurato uno e consegnato a (6,6)',
+      r9 !== null && Math.round(beliefs.me.x) === 6 && Math.round(beliefs.me.y) === 6 &&
+      (beliefs.carriedParcels?.length ?? 0) === 0);
+
 console.log(`\n${fail === 0 ? '🎉' : '⚠️'}  ${pass} ok, ${fail} falliti`);
 process.exit(fail === 0 ? 0 : 1);

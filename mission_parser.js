@@ -102,6 +102,7 @@ You DO NOT decide anything and DO NOT execute anything: you only extract structu
 
 Output ONLY one JSON object, no markdown fences, no explanations. Fields:
 {
+ "reasoning": "<ONE short sentence: how you interpreted the mission and why>",
  "kind": "question" | "action" | "rule" | "coordination",
  "question": "<for kind=question: the question to answer>" or null,
  "reward": <points promised or threatened, WITH SIGN, e.g. -100; null if not stated>,
@@ -147,43 +148,46 @@ Definitions:
 Examples:
 
 Mission: "Move to coordinate (4,7) and you get +10pts"
-{"kind":"action","question":null,"reward":10,"multiplier":null,"action":{"type":"move","x":"4","y":"7","place":null,"candidates":null},"rule":null,"rule_nature":null}
+{"reasoning":"one-shot move to a coordinate for a small bonus","kind":"action","question":null,"reward":10,"multiplier":null,"action":{"type":"move","x":"4","y":"7","place":null,"candidates":null},"rule":null,"rule_nature":null}
 
 Mission: "Move to x=4*2 y=(1+3)*3 to get -10pts"
-{"kind":"action","question":null,"reward":-10,"multiplier":null,"action":{"type":"move","x":"4*2","y":"(1+3)*3","place":null,"candidates":null},"rule":null,"rule_nature":null}
+{"reasoning":"one-shot move with arithmetic coordinates, NEGATIVE reward","kind":"action","question":null,"reward":-10,"multiplier":null,"action":{"type":"move","x":"4*2","y":"(1+3)*3","place":null,"candidates":null},"rule":null,"rule_nature":null}
 
 Mission: "Drop a package in the leftmost tile to get 5pt"
-{"kind":"action","question":null,"reward":5,"multiplier":null,"action":{"type":"drop","x":null,"y":null,"place":"leftmost","candidates":null},"rule":null,"rule_nature":null}
+{"reasoning":"one-shot: bring a parcel to the leftmost tile","kind":"action","question":null,"reward":5,"multiplier":null,"action":{"type":"drop","x":null,"y":null,"place":"leftmost","candidates":null},"rule":null,"rule_nature":null}
+
+Mission: "Deliver a package in 18,19 to get a 1000pts bonus una tantum. Coordinates are [{\"x\":18,\"y\":19}]"
+{"reasoning":"'una tantum' = ONE-TIME, so not a rule: bring one parcel to (18,19) once","kind":"action","question":null,"reward":1000,"multiplier":null,"action":{"type":"drop","x":"18","y":"19","place":null,"candidates":null},"rule":null,"rule_nature":null}
 
 Mission: "What is the capital of Italy?"
-{"kind":"question","question":"What is the capital of Italy?","reward":null,"multiplier":null,"action":null,"rule":null,"rule_nature":null}
+{"reasoning":"knowledge question, nothing moves in the game","kind":"question","question":"What is the capital of Italy?","reward":null,"multiplier":null,"action":null,"rule":null,"rule_nature":null}
 
 Mission: "Go to one of (1,2), (3,4) or (5,6) for a one-time bonus of 20pts"
-{"kind":"action","question":null,"reward":20,"multiplier":null,"action":{"type":"move","x":null,"y":null,"place":null,"candidates":[[1,2],[3,4],[5,6]]},"rule":null,"rule_nature":null}
+{"reasoning":"one-shot move to ANY of the listed coordinates","kind":"action","question":null,"reward":20,"multiplier":null,"action":{"type":"move","x":null,"y":null,"place":null,"candidates":[[1,2],[3,4],[5,6]]},"rule":null,"rule_nature":null}
 
 Mission: "Deliver stacks of exactly 3 parcels at a time to double the reward"
-{"kind":"rule","question":null,"reward":null,"multiplier":2,"action":null,"rule":{"type":"stack_size","n":3},"rule_nature":"opportunity"}
+{"reasoning":"changes delivery behaviour for the whole match: opt-in rule with 2x bonus","kind":"rule","question":null,"reward":null,"multiplier":2,"action":null,"rule":{"type":"stack_size","n":3},"rule_nature":"opportunity"}
 
 Mission: "Every time you deliver in (2,2) you get 0pts"
-{"kind":"rule","question":null,"reward":0,"multiplier":null,"action":null,"rule":{"type":"zero_delivery","tiles":[[2,2]]},"rule_nature":"constraint"}
+{"reasoning":"'every time' = persistent penalty on a delivery tile","kind":"rule","question":null,"reward":0,"multiplier":null,"action":null,"rule":{"type":"zero_delivery","tiles":[[2,2]]},"rule_nature":"constraint"}
 
 Mission: "Every time you deliver in (3,3) or (7,7) you get 5x pts than in a regular delivery tile"
-{"kind":"rule","question":null,"reward":null,"multiplier":5,"action":null,"rule":{"type":"bonus_delivery","tiles":[[3,3],[7,7]]},"rule_nature":"opportunity"}
+{"reasoning":"'every time' = persistent bonus on two delivery tiles","kind":"rule","question":null,"reward":null,"multiplier":5,"action":null,"rule":{"type":"bonus_delivery","tiles":[[3,3],[7,7]]},"rule_nature":"opportunity"}
 
 Mission: "If you deliver parcels with a score higher than 10, you get no reward."
-{"kind":"rule","question":null,"reward":null,"multiplier":null,"action":null,"rule":{"type":"max_parcel_reward","value":10},"rule_nature":"constraint"}
+{"reasoning":"persistent cap on parcel value at delivery","kind":"rule","question":null,"reward":null,"multiplier":null,"action":null,"rule":{"type":"max_parcel_reward","value":10},"rule_nature":"constraint"}
 
 Mission: "Do not go through tile (5,7) otherwise you lose 50pts."
-{"kind":"rule","question":null,"reward":-50,"multiplier":null,"action":null,"rule":{"type":"forbidden_tile","tiles":[[5,7]]},"rule_nature":"constraint"}
+{"reasoning":"persistent penalty on crossing a tile: avoid it forever","kind":"rule","question":null,"reward":-50,"multiplier":null,"action":null,"rule":{"type":"forbidden_tile","tiles":[[5,7]]},"rule_nature":"constraint"}
 
 Mission: "Move both agents to the neighborhood of position (6,6) within a maximum distance of 3, and have them wait for each other. You will receive 500pts."
-{"kind":"coordination","question":null,"reward":500,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"meet_at","x":6,"y":6,"max_distance":3}}
+{"reasoning":"requires BOTH agents: meet near a position and wait","kind":"coordination","question":null,"reward":500,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"meet_at","x":6,"y":6,"max_distance":3}}
 
 Mission: "If a parcel is initially picked up by one agent and later delivered by the other agent, you will receive a 200 points bonus."
-{"kind":"coordination","question":null,"reward":200,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"handoff"}}
+{"reasoning":"requires both agents: parcel handoff between them","kind":"coordination","question":null,"reward":200,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"handoff"}}
 
 Mission: "All agents must move to an odd-numbered row and wait for our message before moving again, as in a red light, green light game. 700 points bonus."
-{"kind":"coordination","question":null,"reward":700,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"hold_rows","parity":"odd"}}
+{"reasoning":"both agents park on odd rows and wait for the sender's go signal","kind":"coordination","question":null,"reward":700,"multiplier":null,"action":null,"rule":null,"rule_nature":null,"coordination":{"type":"hold_rows","parity":"odd"}}
 `.trim();
 
 async function llmParse(text) {
@@ -249,6 +253,44 @@ function allParens(text) {
         .map(m => [Number(m[1]), Number(m[2])]);
 }
 
+// Coordinate in tutte le forme che mandano i prof, de-duplicate in ordine:
+//   (18,19)            parentesi
+//   {"x":18,"y":19}    JSON (anche x/y invertiti)
+//   18,19              coppia nuda (es. "deliver in 18,19")
+function allCoords(text) {
+    const s = String(text);
+    const out = [];
+    const seen = new Set();
+    const add = (x, y) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const k = `${x}_${y}`;
+        if (!seen.has(k)) { seen.add(k); out.push([x, y]); }
+    };
+    for (const m of s.matchAll(/\{[^{}]*?"x"\s*:\s*(-?\d+)[^{}]*?"y"\s*:\s*(-?\d+)[^{}]*?\}/g))
+        add(Number(m[1]), Number(m[2]));
+    for (const m of s.matchAll(/\((\d+)\s*,\s*(\d+)\)/g))
+        add(Number(m[1]), Number(m[2]));
+    for (const m of s.matchAll(/(?<![\d.])(\d{1,3})\s*,\s*(\d{1,3})(?![\d.])/g))
+        add(Number(m[1]), Number(m[2]));
+    return out;
+}
+
+// Estrae le tile {x,y} da una regola (formato {tiles:[[x,y],...]} o {x,y}).
+// Usato dalla guardia "una tantum" per riconvertire una bonus_delivery in
+// un'azione di drop sulle stesse coordinate.
+function ruleTilesFrom(rule) {
+    if (Array.isArray(rule?.tiles)) {
+        return rule.tiles
+            .map(t => Array.isArray(t) ? { x: Number(t[0]), y: Number(t[1]) }
+                                       : { x: Number(t?.x), y: Number(t?.y) })
+            .filter(t => Number.isFinite(t.x) && Number.isFinite(t.y));
+    }
+    if (Number.isFinite(Number(rule?.x)) && Number.isFinite(Number(rule?.y))) {
+        return [{ x: Number(rule.x), y: Number(rule.y) }];
+    }
+    return [];
+}
+
 /**
  * Estrazione DETERMINISTICA di una regola L2 dai template noti delle missioni
  * del prof. Restituisce una regola strutturata solo se il testo combacia con
@@ -305,11 +347,13 @@ function fallbackParse(text) {
     }
     // Azione: si estrae quel che c'è; le guardie poi pretendono target
     // esplicito + reward esplicito positivo, sennò scartano.
-    const action = { type: /\b(drop|putdown|consegna)\b/.test(t) ? 'drop'
+    // "deliver/consegna/porta ... in (x,y)" = drop (porta un pacco lì).
+    const action = { type: /\b(drop|putdown|deliver|consegna|porta)\b/.test(t) ? 'drop'
                         : /\b(pick|raccogli|prendi)\b/.test(t)   ? 'pickup' : 'move' };
-    const parens = allParens(text);
-    if (parens.length === 1)     { action.x = String(parens[0][0]); action.y = String(parens[0][1]); }
-    else if (parens.length > 1)  { action.candidates = parens; }   // "one of ..."
+    // Coordinate in tutte le forme: (x,y) | x,y nudo | {"x":..,"y":..}
+    const coords = allCoords(text);
+    if (coords.length === 1)     { action.x = String(coords[0][0]); action.y = String(coords[0][1]); }
+    else if (coords.length > 1)  { action.candidates = coords; }   // "one of ..."
     else {
         const xm = text.match(/x\s*=\s*([\d*+()\s.\/-]+?)(?=\s*y\s*=|\s*$)/i);
         const ym = text.match(/y\s*=\s*([\d*+()\s.\/-]+?)(?=\s+to\b|\s*$)/i);
@@ -442,14 +486,32 @@ export async function parseMission(text, beliefs) {
     let parsed, source = 'llm';
     try {
         parsed = await llmParseWithRetry(text);
-        // Il "ragionamento" dell'LLM è tutto qui: il JSON in cui ha tradotto
-        // la missione. Da qui in poi decide solo codice deterministico.
-        console.log(`[PARSER] LLM ha capito: ${JSON.stringify(parsed)}`);
+        // Il "ragionamento" del modello: la frase che ha scritto + il JSON in
+        // cui ha tradotto la missione. Da qui in poi decide solo codice.
+        console.log(`[PARSER] 💭 LLM ragiona: "${parsed.reasoning ?? '(nessuna frase)'}"`);
+        console.log(`[PARSER]    → JSON: ${JSON.stringify({ ...parsed, reasoning: undefined })}`);
     } catch (e) {
         console.warn(`[PARSER] LLM giù dopo ${PARSE_ATTEMPTS} tentativi → fallback regex prudente`);
         parsed = fallbackParse(text);
         source = 'regex';
-        console.log(`[PARSER] regex ha capito: ${JSON.stringify(parsed)}`);
+        console.log(`[PARSER] 🔧 regex ha capito (senza LLM): ${JSON.stringify(parsed)}`);
+    }
+
+    // 1b. Guardia "una tantum": se il testo dice esplicitamente che è ONE-SHOT
+    //     ma il modello l'ha letta come regola persistente, lo correggiamo.
+    //     ("Deliver in (x,y) ... una tantum" assomiglia a bonus_delivery, ma
+    //      "una tantum"/"once" la rendono un'azione singola.)
+    const ONE_SHOT_RE = /\b(una\s+tantum|one[-\s]?time|just\s+once|this\s+time\s+only|solo\s+(questa\s+volta|una\s+volta))\b/i;
+    if (parsed.kind === 'rule' && ONE_SHOT_RE.test(text)) {
+        const tiles = parsed.rule ? ruleTilesFrom(parsed.rule) : [];
+        console.log(`[PARSER]    ⚠ "una tantum" rilevato → riclassifico da rule ad action one-shot`);
+        parsed = {
+            ...parsed, kind: 'action', rule: null, rule_nature: null,
+            action: tiles.length === 1
+                ? { type: 'drop', x: String(tiles[0].x), y: String(tiles[0].y) }
+                : (parsed.action ?? { type: 'drop',
+                    candidates: tiles.length ? tiles.map(t => [t.x, t.y]) : null }),
+        };
     }
 
     // 2. Rete di sicurezza sul reward: la regex decide il segno.

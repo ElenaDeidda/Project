@@ -44,6 +44,58 @@ function nearestFreeParcel(beliefs) {
         manhattan(p, beliefs.me) < manhattan(best, beliefs.me) ? p : best);
 }
 
+// Miglior punto d'osservazione per TROVARE pacchi: spawn tile con più
+// visibilità, vicina a me. (Stessa euristica del rules_engine.)
+function bestSpawnTile(beliefs) {
+    const spawnVis = beliefs.spawnVisibility ?? new Map();
+    if (spawnVis.size === 0) return null;
+    let best = null, bestScore = -Infinity;
+    for (const [key, vis] of spawnVis.entries()) {
+        const [x, y] = key.split('_').map(Number);
+        const score = vis * 10 - manhattan({ x, y }, beliefs.me);
+        if (score > bestScore) { best = { x, y }; bestScore = score; }
+    }
+    return best;
+}
+
+// Procura un pacco quando non ne porto e non ne vedo: vado su una spawn tile
+// ad alta visibilità e aspetto/cerco finché non ne compare uno (con timeout).
+// È il comportamento che aveva il vecchio agente LLM via tool, qui reso
+// deterministico. Ritorna 'got' | 'stopped' | 'timeout'.
+const PARCEL_HUNT_MS    = 20_000;   // tempo massimo a caccia di un pacco
+const PARCEL_POLL_MS    = 600;      // ogni quanto ricontrollo i beliefs
+async function acquireParcel(ctx, signal, log) {
+    const { beliefs, socket } = ctx;
+    const deadline = Date.now() + PARCEL_HUNT_MS;
+
+    while (Date.now() < deadline) {
+        if (aborted(signal)) return 'stopped';
+
+        const p = nearestFreeParcel(beliefs);
+        if (p) {
+            log(`pacco avvistato a (${Math.round(p.x)},${Math.round(p.y)}) → vado a raccoglierlo`);
+            const r = await goToRobust(p, ctx, signal);
+            if (r === 'stopped') return 'stopped';
+            if (r === 'reached') {
+                await socket.emitPickup();
+                if ((beliefs.carriedParcels?.length ?? 0) > 0) return 'got';
+            }
+            continue;   // pacco sparito/preso da altri → riprovo
+        }
+
+        // Niente in vista: vado su una spawn tile a fare da vedetta.
+        const spot = bestSpawnTile(beliefs);
+        if (spot && manhattan(spot, beliefs.me) > 0) {
+            log(`nessun pacco in vista → presidio la spawn tile (${spot.x},${spot.y}) in attesa`);
+            const r = await goToRobust(spot, ctx, signal);
+            if (r === 'stopped') return 'stopped';
+        } else {
+            await sleep(PARCEL_POLL_MS);   // già sulla vedetta → aspetto lo spawn
+        }
+    }
+    return 'timeout';
+}
+
 // Navigazione con abort: il signal della coda diventa lo shouldStop di
 // navigateTo → l'interruzione ferma l'agente al passo successivo, non a fine
 // percorso come faceva il ReAct.
@@ -206,15 +258,14 @@ async function execAction(text, verdict, ctx, signal) {
     if (type === 'drop') {
         if (!target) throw new Error('drop senza target risolto');
 
-        // Mi serve almeno un pacco: se non ne porto, prima ne raccolgo uno.
+        // Mi serve almeno un pacco. Se non ne porto, lo vado a procurare:
+        // un pacco in vista lo raccolgo subito, altrimenti presidio una spawn
+        // tile e aspetto che ne compaia uno (come il vecchio agente LLM).
         if ((beliefs.carriedParcels?.length ?? 0) === 0) {
-            const p = nearestFreeParcel(beliefs);
-            if (!p) throw new Error('drop richiesto ma nessun pacco in mano né in vista: rinuncio');
-            log(`niente in mano → raccolgo il pacco a (${Math.round(p.x)},${Math.round(p.y)})`);
-            const r1 = await goToRobust(p, ctx, signal);
-            if (r1 === 'stopped') return null;
-            if (r1 !== 'reached') throw new Error('pacco da raccogliere irraggiungibile');
-            await socket.emitPickup();
+            log(`la missione chiede di consegnare a (${target.x},${target.y}) ma non porto nulla → procuro un pacco`);
+            const got = await acquireParcel(ctx, signal, log);
+            if (got === 'stopped') return null;
+            if (got === 'timeout') throw new Error(`nessun pacco trovato in ${PARCEL_HUNT_MS / 1000}s: rinuncio`);
         }
         if (aborted(signal)) return null;
 
