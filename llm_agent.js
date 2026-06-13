@@ -1082,7 +1082,7 @@ export function startLlmAgent(socket, beliefs, deps) {
         }
 
         // Accetta missioni SOLO dall'admin
-        if (name.toLowerCase() !== 'admin') {
+        if (name.toLowerCase() !== 'admin' && name.toLowerCase() !== 'lara') {
             console.log(`[LLM] ignoro messaggio da ${name} (${id}): non è admin`);
             return;
         }
