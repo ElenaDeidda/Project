@@ -8,9 +8,6 @@
 //   const verdict = evaluateMission(missionText, beliefs);
 //   if (verdict.worth) { ...esegui con llm_agent... } else { ...ignora... }
 
-// Stima euristica: passi al secondo dell'agente (per convertire distanza→tempo)
-const STEPS_PER_POINT_THRESHOLD = 3; // se servono >3 passi per ogni punto → non conviene
-
 // Pattern che riconoscono una missione di Livello 2 = REGOLA persistente.
 // Sono missioni che modificano il comportamento normale del gioco per il
 // resto della partita. Vanno installate via set_rule() e tipicamente
@@ -128,10 +125,17 @@ export function evaluateMission(missionText, beliefs) {
                  reason: `regola L2 persistente (pri=${priority})` };
     }
 
-    // 1. Trappola atomica (reward esplicito ≤ 0, non-L2) → mai eseguita
+    // NOTA (policy "esegui sempre"): la coda NON cestina più le missioni. La
+    // decisione "saltare o no" è demandata allo stadio di COMPRENSIONE in
+    // llm_agent (family:"ignore" = trappola auto-lesiva). Qui calcoliamo SOLO
+    // la priorità. Così non buttiamo via missioni-obbligo a penalità (es. il
+    // "red light/green light", che ha reward negativo ma è un OBBLIGO).
+
+    // 1. Reward esplicito ≤ 0 (non-L2): NON scartata, ma priorità minima — la
+    //    comprensione deciderà se è una trappola da ignorare o un obbligo.
     if (reward !== null && reward <= 0) {
-        return { worth: false, priority: 0, reward, cost,
-                 reason: 'reward negativo/nullo (trappola)' };
+        return { worth: true, priority: 0.1, reward, cost,
+                 reason: 'reward ≤ 0: decisione rimandata alla comprensione' };
     }
 
     // 2. Missione informativa (no reward, no target) → costo 0
@@ -141,23 +145,22 @@ export function evaluateMission(missionText, beliefs) {
                  reason: 'missione informativa, costo nullo' };
     }
 
-    // 3. Reward ignoto ma c'è un costo → tentativo cauto
+    // 3. Reward ignoto ma c'è un costo → eseguita comunque, priorità in base
+    //    alla vicinanza del target (più vicino = priorità un filo più alta).
     if (reward === null) {
-        const worth = cost <= 10;
-        return { worth, priority: worth ? 1.0 : 0, reward, cost,
-                 reason: worth ? 'reward ignoto ma target vicino'
-                               : 'reward ignoto e target lontano' };
+        const near = cost <= 10;
+        return { worth: true, priority: near ? 1.0 : 0.3, reward, cost,
+                 reason: near ? 'reward ignoto, target vicino'
+                              : 'reward ignoto, target lontano' };
     }
 
-    // 4. Reward noto: priority = reward / (cost+1). Più punti per passo = meglio.
+    // 4. Reward noto: eseguita comunque. priority = reward / (cost+1): più punti
+    //    per passo = priorità più alta (le "troppo costose" finiscono in fondo
+    //    alla coda, ma NON vengono scartate).
     //    Esempio: 500pt in 5 passi = 83.3; 10pt in 2 passi = 3.3; 10pt in 20 passi = 0.5
-    const stepsPerPoint = cost / reward;
-    const worth    = stepsPerPoint <= STEPS_PER_POINT_THRESHOLD;
-    const priority = worth ? reward / (cost + 1) : 0;
+    const priority = reward / (cost + 1);
     return {
-        worth, priority, reward, cost,
-        reason: worth
-            ? `${reward}pt in ${cost} passi (pri=${priority.toFixed(2)})`
-            : `troppo costosa (${cost} passi per ${reward}pt)`,
+        worth: true, priority, reward, cost,
+        reason: `${reward}pt in ${cost} passi (pri=${priority.toFixed(2)})`,
     };
 }
