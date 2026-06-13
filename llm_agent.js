@@ -213,8 +213,17 @@ function makeTools(ctx) {
             const res = await deps.navigateTo(
                 beliefs.me, target, socket, beliefs.mapTiles, () => false
             );
-            return res === 'failed' ? `Error: irraggiungibile (${target.x},${target.y})`
-                                    : `Arrivato a (${target.x},${target.y})`;
+            // VERIFICA REALE: non fidarti del solo codice di ritorno. navigateTo
+            // può restituire 'stopped' (interrotto) o arrivare solo in parte;
+            // confrontiamo la posizione EFFETTIVA col target così non dichiariamo
+            // un arrivo che non è avvenuto. Se non siamo arrivati → Error, che
+            // fa scattare la reflection invece di un falso "completato".
+            const here = { x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y) };
+            const arrived = here.x === target.x && here.y === target.y;
+            if (!arrived) {
+                return `Error: non arrivato a (${target.x},${target.y}) — sono a (${here.x},${here.y}) [navigateTo=${res}]`;
+            }
+            return `Arrivato a (${target.x},${target.y})`;
         },
 
         // ── L1: pickup / putdown ─────────────────────────────────────────────
