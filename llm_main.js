@@ -61,7 +61,7 @@ function logPredicateIfChanged(predicate) {
     const key = JSON.stringify(predicate);
     if (key === _lastPredicate) return;
     _lastPredicate = key;
-    console.log(`[BDI-LLM] → ${predicate?.[0]}(${(predicate ?? []).slice(1).join(',')})`);
+    // console.log(`[BDI-LLM] → ${predicate?.[0]}(${(predicate ?? []).slice(1).join(',')})`);  // silenziato: rumore BDI
 }
 
 // ─── L2: regole attive installate dall'LLM via set_rule() ─────────────────────
@@ -134,9 +134,9 @@ async function applyRulesAsActions(socket, beliefs) {
 
     if (idsToDrop.size > 0) {
         const ids = [...idsToDrop];
-        console.log(`[RULES] scarico ${ids.length} pacchi non conformi: ${ids.join(',')} @(${x},${y})`);
+        // console.log(`[RULES] scarico ${ids.length} pacchi non conformi: ${ids.join(',')} @(${x},${y})`);  // silenziato: rumore BDI
         try { await socket.emitPutdown(ids); }
-        catch (e) { console.warn(`[RULES] emitPutdown fallito: ${e?.message ?? e}`); }
+        catch (e) { /* console.warn(`[RULES] emitPutdown fallito: ${e?.message ?? e}`); */ }  // silenziato: rumore BDI
     }
 }
 
@@ -202,7 +202,7 @@ function applyRulesToPredicate(predicate) {
         const carried = beliefs.carriedParcels?.length ?? 0;
         if (carried < N) {
             const alt = redirectAwayFromDeliver(beliefs);
-            console.log(`[RULES] stackSize=${N}: porto ${carried} → ${alt[0]}(${alt.slice(1).join(',')})`);
+            // console.log(`[RULES] stackSize=${N}: porto ${carried} → ${alt[0]}(${alt.slice(1).join(',')})`);  // silenziato: rumore BDI
             return alt;
         }
     }
@@ -216,14 +216,14 @@ function applyRulesToPredicate(predicate) {
                 d => !activeRules.zeroDeliveries.some(t => t.x === d.x && t.y === d.y)
             );
             if (alts.length === 0) {
-                console.log(`[RULES] zeroDelivery: nessuna delivery permessa → redirect`);
+                // console.log(`[RULES] zeroDelivery: nessuna delivery permessa → redirect`);  // silenziato: rumore BDI
                 return redirectAwayFromDeliver(beliefs);
             }
             alts.sort((a, b) =>
                 (Math.abs(a.x-beliefs.me.x)+Math.abs(a.y-beliefs.me.y)) -
                 (Math.abs(b.x-beliefs.me.x)+Math.abs(b.y-beliefs.me.y)));
             const alt = alts[0];
-            console.log(`[RULES] zeroDelivery: (${x},${y}) vietata → (${alt.x},${alt.y})`);
+            // console.log(`[RULES] zeroDelivery: (${x},${y}) vietata → (${alt.x},${alt.y})`);  // silenziato: rumore BDI
             return ['deliver', alt.x, alt.y];
         }
     }
@@ -238,12 +238,12 @@ function applyRulesToPredicate(predicate) {
             const myDist = Math.abs(x - beliefs.me.x) + Math.abs(y - beliefs.me.y);
             for (const b of activeRules.bonusDeliveries) {
                 if (isTileOccupiedByEnemy(b, beliefs)) {
-                    console.log(`[RULES] bonusDelivery: (${b.x},${b.y}) occupata da nemico, skip`);
+                    // console.log(`[RULES] bonusDelivery: (${b.x},${b.y}) occupata da nemico, skip`);  // silenziato: rumore BDI
                     continue;
                 }
                 const bDist = Math.abs(b.x - beliefs.me.x) + Math.abs(b.y - beliefs.me.y);
                 if (bDist <= myDist + 5) {
-                    console.log(`[RULES] bonusDelivery: ridiretto da (${x},${y}) a bonus (${b.x},${b.y})`);
+                    // console.log(`[RULES] bonusDelivery: ridiretto da (${x},${y}) a bonus (${b.x},${b.y})`);  // silenziato: rumore BDI
                     return ['deliver', b.x, b.y];
                 }
             }
@@ -286,7 +286,7 @@ setInterval(() => {
     const carriedValue = (beliefs.carriedParcels ?? [])
         .reduce((s, p) => s + (p.reward || 0), 0);
     const mode = bdiPaused ? '🤖 MISSION' : '🚚 BDI';
-    console.log(`[HEARTBEAT] ${mode} | @(${x},${y}) score=${beliefs.me.score ?? 0} | carry=${carried} (${carriedValue}pt)`);
+    // console.log(`[HEARTBEAT] ${mode} | @(${x},${y}) score=${beliefs.me.score ?? 0} | carry=${carried} (${carriedValue}pt)`);  // silenziato: rumore BDI
 }, 5000);
 
 // 5. Safety net del BDI: rideliberiamo ogni 200ms anche senza sensing nuovo
