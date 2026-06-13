@@ -34,7 +34,7 @@ if (MUTED_LOG_TAGS.length) {
 const { DjsConnect } = await import("@unitn-asa/deliveroo-js-sdk/client");
 const { startLlmAgent } = await import("./llm_agent.js");
 const { navigateTo } = await import("./moves.js");
-const { beliefs, updateConfig, updateMap, updateSensing } = await import("./beliefs.js");
+const { beliefs, updateConfig, updateMap, updateSensing, formatMap } = await import("./beliefs.js");
 // BDI machinery: lo stesso che usa main.js. Lo carichiamo anche qui perché
 // l'LLM agent deve giocare la partita normale (raccolta + consegna) quando
 // non sta eseguendo una special mission.
@@ -293,6 +293,9 @@ await Promise.all([
 ]);
 
 console.log(`[LLM] Pronto. me=(${beliefs.me.x},${beliefs.me.y}) team=${beliefs.me.teamName} | mapTiles=${beliefs.mapTiles.size}`);
+
+// Stampa UNA VOLTA la mappa con le coordinate, così è chiaro come sono i numeri.
+console.log(formatMap(beliefs));
 
 // 4. Avvia l'agente LLM (queue + handler missioni). Gli passiamo:
 //    - navigateTo: il pathfinding A* (anche per i tool dell'LLM)
