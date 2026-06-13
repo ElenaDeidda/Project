@@ -697,6 +697,249 @@ function nearestDelivery(beliefs) {
 }
 
 
+// Distanza di osservazione corrente (default 5 come da SDK).
+function obsDistOf(beliefs) {
+    return beliefs.config?.GAME?.player?.observation_distance ?? 5;
+}
+
+// Pacco libero ATTUALMENTE VISIBILE (entro obs_distance) più vicino a me.
+// A differenza di nearestFreeParcel, ignora i pacchi solo "ricordati" fuori
+// vista (fantasmi): inseguirli porta a "Nessun pacco qui".
+function nearestVisibleParcel(beliefs) {
+    const me  = beliefs.me ?? { x: 0, y: 0 };
+    const obs = obsDistOf(beliefs);
+    const visible = [...(beliefs.parcels?.values() ?? [])]
+        .filter(p => !p.carriedBy)
+        .filter(p => (Math.abs(p.x - me.x) + Math.abs(p.y - me.y)) <= obs);
+    if (visible.length === 0) return null;
+    visible.sort((a, b) =>
+        (Math.abs(a.x - me.x) + Math.abs(a.y - me.y)) -
+        (Math.abs(b.x - me.x) + Math.abs(b.y - me.y)));
+    return visible[0];
+}
+
+// Spawn tile "migliore": alta visibilità, vicina a me. Dove ANDARE a cercare
+// pacchi quando non se ne vede nessuno (invece di inseguire fantasmi).
+function bestSpawnTile(beliefs) {
+    const spawnVis = beliefs.spawnVisibility ?? new Map();
+    if (spawnVis.size === 0) return null;
+    const me = beliefs.me ?? { x: 0, y: 0 };
+    let best = null, bestScore = -Infinity;
+    for (const [key, vis] of spawnVis.entries()) {
+        const [x, y] = key.split('_').map(Number);
+        const score = vis * 10 - (Math.abs(x - me.x) + Math.abs(y - me.y));
+        if (score > bestScore) { best = { x, y }; bestScore = score; }
+    }
+    return best;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FASE 0: COMPRENSIONE (query rewriting → intento JSON strutturato)
+//
+// 1 sola chiamata LLM il cui UNICO compito è capire COSA fare e in che ORDINE,
+// senza inventare coordinate. Da qui ricaviamo gli step in modo DETERMINISTICO
+// (compileIntent), così il planner non può allucinare (es. delivery point
+// inventati). Separare "capire" da "fare" è ciò che rende il tutto robusto.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildUnderstandPrompt() {
+    return `
+You are the COMPREHENSION stage of a Deliveroo agent. Read a special mission in
+natural language (any language) and output ONLY a JSON object describing WHAT to
+do and in WHICH ORDER. Do NOT plan tool calls. Do NOT add any prose around the JSON.
+
+Schema:
+{
+  "family": "question" | "atomic" | "rule" | "reactive" | "ignore",
+  "reason": "<very short justification>",
+
+  // family "question": answer something to the mission giver
+  "compute": "<math expression or null>",   // e.g. "5*5"; null if not arithmetic
+  "answer":  "<text to send, or 'computed' to send the computed value>",
+
+  // family "atomic": a one-shot sequence of physical objectives, IN ORDER
+  "objectives": [
+     { "verb": "move",           "at": [x,y] },                  // go to a tile
+     { "verb": "move",           "candidates": [[x,y],[x,y]] },  // go to the CLOSEST of these
+     { "verb": "pickup",         "at": [x,y] | "nearest" },      // pick a parcel
+     { "verb": "acquire_parcel" },                               // make sure you carry a parcel
+     { "verb": "deliver",        "at": [x,y] | "nearest" }       // drop carried parcels here
+  ],
+
+  // family "rule": persistent modifier of normal play (installed via set_rule)
+  "rules": [ {"type":"forbidden_tile","x":5,"y":7}, {"type":"stack_size","n":3},
+             {"type":"zero_delivery","x":2,"y":2}, {"type":"bonus_delivery","x":3,"y":3},
+             {"type":"max_parcel_reward","value":10} ],
+  "validity": { "scope": "match" },   // default = whole game; or {"scope":"until_signal","match":"green light"} / {"scope":"duration_ms","ms":30000}
+
+  // family "reactive": conditional/temporal behaviour driven by signals/messages
+  "reactive": { "behavior": "freeze_movement", "until": {"signal":"message","match":"green"}, "penalty": -1000 }
+}
+
+CRITICAL RULES:
+- Use ONLY coordinates that literally appear in the mission text. NEVER invent
+  coordinates. For "the nearest parcel/delivery" use the string "nearest".
+- Decide ORDER carefully. "Deliver a package IN (x,y)" means: FIRST get a parcel
+  (acquire_parcel), THEN deliver at (x,y). The delivery location is (x,y).
+- family "ignore" ONLY when the negative reward is the consequence of DOING the
+  action (a self-defeating trap) AND there is no obligation. If the penalty is
+  for NOT complying (e.g. "lose 1000pts unless you stop/avoid/wait") it is NOT
+  ignore — it is "rule" or "reactive". When in doubt, DO NOT ignore.
+- "don't / avoid / never cross / never go to X", "stacks of N", "every time",
+  "from now on" → family "rule".
+- "stop and wait for a message/signal", "red light / green light" → "reactive".
+
+Examples:
+Mission: "Calcola 5*5"
+{"family":"question","compute":"5*5","answer":"computed"}
+
+Mission: "What is the capital of Italy?"
+{"family":"question","compute":null,"answer":"Rome"}
+
+Mission: "Move to (4,7)"
+{"family":"atomic","objectives":[{"verb":"move","at":[4,7]}]}
+
+Mission: "Pick up the parcel at (2,3) and deliver it"
+{"family":"atomic","objectives":[{"verb":"pickup","at":[2,3]},{"verb":"deliver","at":"nearest"}]}
+
+Mission: "Deliver a package in 1,1 to get a 1000pts bonus. Coordinates are [{\"x\":1,\"y\":1}]"
+{"family":"atomic","reason":"acquire then deliver at (1,1)","objectives":[{"verb":"acquire_parcel"},{"verb":"deliver","at":[1,1]}]}
+
+Mission: "Go to one of (1,2)/(3,4) for a bonus"
+{"family":"atomic","objectives":[{"verb":"move","candidates":[[1,2],[3,4]]}]}
+
+Mission: "Don't cross 1,1 to get 100pts"
+{"family":"rule","reason":"avoid tile for the whole match","rules":[{"type":"forbidden_tile","x":1,"y":1}],"validity":{"scope":"match"}}
+
+Mission: "Deliver in stacks of exactly 3"
+{"family":"rule","rules":[{"type":"stack_size","n":3}],"validity":{"scope":"match"}}
+
+Mission: "Stop at red light and wait for the green light message. Bonus is -1000pts."
+{"family":"reactive","reason":"freeze until green light, penalty for moving","reactive":{"behavior":"freeze_movement","until":{"signal":"message","match":"green"},"penalty":-1000}}
+
+Mission: "Move to (1,1) and you get -10pts"
+{"family":"ignore","reason":"penalty for doing it, no obligation"}
+
+Output ONLY the JSON object.
+`.trim();
+}
+
+// Estrae il primo oggetto JSON {...} bilanciato dal testo del modello.
+function parseIntentJson(text) {
+    const t = String(text || '');
+    const start = t.indexOf('{');
+    if (start < 0) return null;
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < t.length; i++) {
+        const ch = t[i];
+        if (inStr) {
+            if (esc) esc = false;
+            else if (ch === '\\') esc = true;
+            else if (ch === '"') inStr = false;
+        } else if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') { if (--depth === 0) { try { return JSON.parse(t.slice(start, i + 1)); } catch { return null; } } }
+    }
+    return null;
+}
+
+/**
+ * Chiama l'LLM una volta per CAPIRE la missione → intento JSON strutturato.
+ * @returns {Promise<object|null>} intento normalizzato, o null se non interpretabile
+ */
+async function understandMission(missionText, beliefs, tools) {
+    const world = await tools.inspect();
+    const out = await callModel([
+        { role: 'system', content: buildUnderstandPrompt() },
+        { role: 'user',   content: `Mission: ${missionText}\n\nCurrent world state:\n${world}` },
+    ], { temperature: 0 });
+
+    console.log(`[LLM-UNDERSTAND] risposta modello:\n${out}`);
+    const intent = parseIntentJson(out);
+    if (!intent || typeof intent.family !== 'string') return null;
+    const fam = intent.family.toLowerCase();
+    if (!['question', 'atomic', 'rule', 'reactive', 'ignore'].includes(fam)) return null;
+    intent.family = fam;
+    return intent;
+}
+
+// Coordinata [x,y] o {x,y} → stringa "x,y" (null se non valida).
+function coordStr(at) {
+    if (Array.isArray(at) && at.length >= 2 && at[0] != null && at[1] != null)
+        return `${Math.round(at[0])},${Math.round(at[1])}`;
+    if (at && typeof at === 'object' && at.x != null && at.y != null)
+        return `${Math.round(at.x)},${Math.round(at.y)}`;
+    return null;
+}
+
+// Tra più candidati, scegli il più vicino a me. Ritorna [x,y] o null.
+function nearestCandidate(cands, me) {
+    const m = me ?? { x: 0, y: 0 };
+    let best = null, bestD = Infinity;
+    for (const c of cands ?? []) {
+        const cc = Array.isArray(c) ? { x: c[0], y: c[1] } : c;
+        if (cc?.x == null || cc?.y == null) continue;
+        const d = Math.abs(cc.x - m.x) + Math.abs(cc.y - m.y);
+        if (d < bestD) { best = [cc.x, cc.y]; bestD = d; }
+    }
+    return best;
+}
+
+/**
+ * Compila DETERMINISTICAMENTE l'intento in step eseguibili (stesso formato che
+ * usa l'execution loop). Niente LLM, niente coordinate inventate: i target
+ * vengono solo dall'intento (che a sua volta li prende solo dal testo missione).
+ * @returns {{steps: Array<{action, target, description}>}}
+ */
+function compileIntent(intent, beliefs) {
+    const steps = [];
+    const push = (action, target = '') =>
+        steps.push({ action, target: String(target), description: `${action}: ${target}` });
+
+    if (intent.family === 'question') {
+        if (intent.compute && String(intent.compute).trim()) {
+            push('calculate', String(intent.compute).trim());
+            push('answer', 'result');               // invia il valore calcolato
+        } else if (intent.answer != null) {
+            push('answer', String(intent.answer));
+        }
+        return { steps };
+    }
+
+    if (intent.family === 'atomic') {
+        for (const o of Array.isArray(intent.objectives) ? intent.objectives : []) {
+            const verb = String(o?.verb || '').toLowerCase();
+            if (verb === 'acquire_parcel') { push('go_pick_up', 'nearest'); continue; }
+
+            let coord = coordStr(o?.at);
+            if (!coord && Array.isArray(o?.candidates) && o.candidates.length) {
+                const best = nearestCandidate(o.candidates, beliefs.me);
+                if (best) coord = `${best[0]},${best[1]}`;
+            }
+            if (verb === 'move'    && coord) push('navigate_to', coord);
+            else if (verb === 'pickup')      push('go_pick_up', coord || 'nearest');
+            else if (verb === 'deliver')     push('go_deliver', coord || 'nearest');
+        }
+        return { steps };
+    }
+
+    if (intent.family === 'rule') {
+        const rules = Array.isArray(intent.rules) ? intent.rules
+                    : (intent.rule ? [intent.rule] : []);
+        for (const r of rules) if (r && typeof r === 'object') push('set_rule', JSON.stringify(r));
+        const scope = intent.validity?.scope;
+        if (scope && scope !== 'match') {
+            console.warn(`[LLM-UNDERSTAND] validità '${scope}' non auto-applicata nel nucleo: la regola resta persistente (no auto-scadenza).`);
+        }
+        return { steps };
+    }
+
+    // ignore / reactive → nessuno step (gestiti a monte in runMission)
+    return { steps };
+}
+
+
 // ── FASE 1: PLANNING ─────────────────────────────────────────────────────────
 
 /**
@@ -783,12 +1026,24 @@ async function executeStep(step, ctx) {
                 return ok(await tools.putdown());
 
             case 'go_pick_up':
+            case 'acquire_parcel':
             case 'pick_up':
             case 'pick': {
-                let c = parseCoords(target);
+                let c = parseCoords(target);          // coordinate esplicite dal testo?
                 if (!c) {
-                    const p = nearestFreeParcel(beliefs);
-                    if (!p) return fail('nessun pacco libero visibile da raccogliere');
+                    // Target simbolico ("nearest"/vuoto/acquire): aggancia un pacco
+                    // VERO, non un ricordo. Solo pacchi attualmente visibili.
+                    let p = nearestVisibleParcel(beliefs);
+                    if (!p) {
+                        // Niente pacchi visibili → vai su una spawn tile e ri-osserva,
+                        // invece di inseguire fantasmi a vuoto.
+                        const s = bestSpawnTile(beliefs);
+                        if (!s) return fail('nessun pacco visibile e nessuna spawn tile nota');
+                        const navS = await tools.navigate_to(`${s.x},${s.y}`);
+                        if (isErr(navS)) return fail(`spawn tile irraggiungibile: ${navS}`);
+                        p = nearestVisibleParcel(beliefs);
+                        if (!p) return fail('nessun pacco trovato neanche dopo la spawn tile');
+                    }
                     c = { x: Math.round(p.x), y: Math.round(p.y) };
                 }
                 const nav = await tools.navigate_to(`${c.x},${c.y}`);
@@ -933,18 +1188,50 @@ async function runMission(missionText, ctx, signal = null) {
         return null;
     }
 
-    // FASE 1: PLANNING (1 sola chiamata LLM)
-    let plan;
+    // FASE 0: COMPRENSIONE (query rewriting → intento JSON strutturato).
+    // Capisce COSA fare e in che ORDINE; la decisione "saltare o no" sta SOLO
+    // qui (option b), non nella coda.
+    let intent = null;
     try {
-        plan = await generatePlan(missionText, ctx.beliefs, tools);
-        state.totalSteps = plan.steps.length;
-        console.log(`[LLM] Piano generato: ${plan.steps.length} steps`);
+        intent = await understandMission(missionText, ctx.beliefs, tools);
     } catch (e) {
-        console.error('[LLM-PLAN] Errore:', e.message);
-        return null;
+        console.warn('[LLM-UNDERSTAND] errore:', e.message);
     }
+
+    if (intent) {
+        console.log(`[LLM-UNDERSTAND] family=${intent.family}${intent.reason ? ` — ${intent.reason}` : ''}`);
+        if (intent.family === 'ignore') {
+            // Unico caso di scarto: trappola auto-lesiva (penalità per AVERLA fatta).
+            console.log('[LLM] Missione IGNORATA (trappola auto-lesiva).');
+            return `Ignorata: ${intent.reason || 'trappola auto-lesiva'}`;
+        }
+        if (intent.family === 'reactive') {
+            // Riconosciuta ma non eseguita: il freeze è fuori dallo scope del nucleo.
+            console.log('[LLM] Missione REATTIVA riconosciuta ma non eseguita (freeze non implementato nel nucleo).');
+            return `Riconosciuta (reactive, non eseguita): ${intent.reason || ''}`;
+        }
+    }
+
+    // FASE 1: PIANO — deterministico dall'intento; fallback al planner LLM
+    // (generatePlan) se la comprensione non è utilizzabile.
+    let plan;
+    const compiled = intent ? compileIntent(intent, ctx.beliefs) : { steps: [] };
+    if (compiled.steps.length > 0) {
+        plan = { steps: compiled.steps, reasoning: intent.reason || '' };
+        console.log(`[LLM] Intento compilato in ${plan.steps.length} steps (family=${intent.family})`);
+    } else {
+        console.log('[LLM] Comprensione non utilizzabile → fallback al planner LLM');
+        try {
+            plan = await generatePlan(missionText, ctx.beliefs, tools);
+        } catch (e) {
+            console.error('[LLM-PLAN] Errore:', e.message);
+            return null;
+        }
+        console.log(`[LLM] Piano generato: ${plan.steps.length} steps`);
+    }
+    state.totalSteps = plan.steps.length;
     if (plan.steps.length === 0) {
-        console.warn('[LLM] Piano vuoto — nessuno step eseguibile');
+        console.warn('[LLM] Nessuno step eseguibile');
         return null;
     }
 
@@ -1111,4 +1398,6 @@ export {
     runMission, generatePlan, executeStep, reflectOnError,
     buildStatefulUserMessage, parsePlan, extractFinalAnswer,
     normalizeAction, parseCoords, snapshotWorld, makeTools,
+    understandMission, parseIntentJson, compileIntent,
+    coordStr, nearestCandidate, nearestVisibleParcel, bestSpawnTile,
 };
