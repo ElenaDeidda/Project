@@ -3,12 +3,112 @@ import { beliefs } from './beliefs.js';
 import { navigateTo } from './moves.js';
 import { smartDist } from './basic_functions.js';
 import { getPddlPlan, planToMoves } from './pddl_planner.js';
+import { solveCratePath, planToMoveSequence } from './pddl_creates.js';
 
 class PlanBase {
     #stopped = false;
     get stopped()    { return this.#stopped; }
     get shouldStop() { return () => this.#stopped; }
     stop()           { this.#stopped = true; }
+}
+
+export class GoPickUpCrate extends PlanBase {
+    #socket;
+    constructor(socket) { super(); this.#socket = socket; }
+    static isApplicableTo(action) { return action === 'go_pick_up' && beliefs.isCrateMap; }
+
+    async execute(_action, x, y, id) {
+        if (this.stopped) throw ['stopped'];
+
+        const parcel = beliefs.parcels.get(id);
+        if (!parcel || parcel.carriedBy) throw [`Pacco ${id} non disponibile`];
+
+        console.log(`[PLANS] GoPickUpCrate PDDL → (${x},${y})`);
+        const planSteps = await solveCratePath(beliefs, x, y);
+        if (!planSteps) throw [`PDDL solver fallito per crate map → (${x},${y})`];
+
+        const moves = planToMoveSequence(planSteps);
+
+        for (const step of moves) {
+            if (this.stopped) throw ['stopped'];
+            const result = await this.#socket.emitMove(step.direction);
+            if (result?.x != null) {
+                beliefs.me.x = result.x;
+                beliefs.me.y = result.y;
+            } else {
+                throw [`Mossa '${step.direction}' rifiutata durante esecuzione piano casse`];
+            }
+            if (step.isPush) {
+                const fromKey = `${step.crateFrom.x}_${step.crateFrom.y}`;
+                const toKey   = `${step.crateTo.x}_${step.crateTo.y}`;
+                beliefs.crateTiles.delete(fromKey);
+                beliefs.crateTiles.set(toKey, step.crateTo);
+                beliefs.mapTiles.set(fromKey, { type: '3' });
+                beliefs.mapTiles.set(toKey,   { type: '5!' });
+            }
+        }
+
+        if (beliefs.carriedParcels.some(p => p.id === id)) return true;
+
+        const picked = await this.#socket.emitPickup();
+        if (!picked || picked.length === 0) throw [`Pickup vuoto in (${x},${y})`];
+        beliefs.carrying       = true;
+        beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
+        return true;
+    }
+}
+
+export class DeliverCrate extends PlanBase {
+    #socket;
+    constructor(socket) { super(); this.#socket = socket; }
+    static isApplicableTo(action) { return action === 'deliver' && beliefs.isCrateMap; }
+
+    async execute(_action, x, y) {
+        if (this.stopped) throw ['stopped'];
+        if (!beliefs.carrying && beliefs.carriedParcels.length === 0)
+            throw ['DeliverCrate chiamato senza pacchi'];
+
+        console.log(`[PLANS] DeliverCrate PDDL → (${x},${y})`);
+        const planSteps = await solveCratePath(beliefs, x, y);
+        if (!planSteps) throw [`PDDL solver fallito per delivery su crate map → (${x},${y})`];
+
+        const moves = planToMoveSequence(planSteps);
+
+        for (const step of moves) {
+            if (this.stopped) throw ['stopped'];
+            const result = await this.#socket.emitMove(step.direction);
+            if (result?.x != null) {
+                beliefs.me.x = result.x;
+                beliefs.me.y = result.y;
+            } else {
+                throw [`Mossa '${step.direction}' rifiutata`];
+            }
+            if (step.isPush) {
+                const fromKey = `${step.crateFrom.x}_${step.crateFrom.y}`;
+                const toKey   = `${step.crateTo.x}_${step.crateTo.y}`;
+                beliefs.crateTiles.delete(fromKey);
+                beliefs.crateTiles.set(toKey, step.crateTo);
+                beliefs.mapTiles.set(fromKey, { type: '3' });
+                beliefs.mapTiles.set(toKey,   { type: '5!' });
+            }
+        }
+
+        const N = beliefs.activeRules?.stackSize;
+        let ids;
+        if (Number.isInteger(N) && beliefs.carriedParcels.length >= N) {
+            ids = [...beliefs.carriedParcels]
+                .sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0))
+                .slice(0, N).map(p => p.id);
+        } else {
+            ids = beliefs.carriedParcels.map(p => p.id);
+        }
+        const dropped = await this.#socket.emitPutdown(ids.length > 0 ? ids : undefined);
+        const set = new Set(ids);
+        beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
+        beliefs.carrying       = beliefs.carriedParcels.length > 0;
+        console.log(`[PLANS] DeliverCrate: depositati ${dropped?.length ?? '?'} pacchi`);
+        return true;
+    }
 }
 
 export class GoPickUp extends PlanBase {
@@ -212,4 +312,4 @@ export class GoToSpawn extends PlanBase {
     }
 }
 
-export const planLibrary = [GoPickUp, Deliver, GoToSpawn];
+export const planLibrary = [GoPickUpCrate, DeliverCrate, GoPickUp, Deliver, GoToSpawn];
