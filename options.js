@@ -40,6 +40,21 @@ function capacityCap() {
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+// ─── stack_size (regola L2) ─────────────────────────────────────────────────
+// Esposto via beliefs.activeRules dal processo LLM. main.js non lo imposta →
+// null → comportamento normale. È limitato dalla capacità reale.
+function stackSizeEffective() {
+    const n = beliefs.activeRules?.stackSize;
+    if (!Number.isInteger(n)) return null;
+    return Math.min(n, capacityCap());
+}
+let _lastStackLogOpt = '';
+function logStackOpt(msg) {
+    if (msg === _lastStackLogOpt) return;
+    _lastStackLogOpt = msg;
+    console.log(`[STACK] ${msg}`);
+}
+
 
 // Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
 // così i due ragionano sullo stesso "valore nel tempo".
@@ -120,6 +135,33 @@ function carriedValue() {
 
 function shouldDeliver() {
     if (!isCarrying()) { resetCollection(); return false; }
+
+    // ─── Vincolo stack_size: consegna in stack di ESATTAMENTE N ──────────────
+    // Se porto N → consegno subito (non aspetto di accumularne altri). Se porto
+    // < N → continuo a RACCOGLIERE con la normale logica del BDI (pickup +
+    // pattugliamento spawn con rotazione delle zone esauste), così la ricerca
+    // del N° pacco usa la STESSA logica del BDI. Consegno un parziale solo se
+    // resto in stallo (nessun pickup per NO_PICKUP_TIMEOUT) → non resto bloccato.
+    const stackN = stackSizeEffective();
+    if (stackN != null) {
+        const now   = Date.now();
+        const count = beliefs.carriedParcels.length;
+        if (lastPickupTime === null || count > prevCarriedCount) lastPickupTime = now;
+        if (count < prevCarriedCount) deliverLatch = false;   // consegna avvenuta → ri-valuto
+        prevCarriedCount = count;
+
+        if (count >= stackN) {
+            logStackOpt(`porto ${count} ≥ ${stackN} → CONSEGNO subito (stack di ${stackN})`);
+            return (deliverLatch = true);
+        }
+        if (now - lastPickupTime > NO_PICKUP_TIMEOUT) {
+            logStackOpt(`porto ${count}/${stackN}, nessun pickup da ${NO_PICKUP_TIMEOUT / 1000}s → consegno il parziale (non resto bloccato)`);
+            return (deliverLatch = true);
+        }
+        logStackOpt(`porto ${count}/${stackN} → continuo a raccogliere (cerco il ${stackN}° con la pattuglia del BDI)`);
+        deliverLatch = false;
+        return false;
+    }
 
     // Inizializzazione una-tantum di N dalla config
     if (N_current === null) {
