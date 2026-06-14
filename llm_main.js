@@ -96,6 +96,11 @@ function logPredicateIfChanged(predicate) {
 //   - applyRulesToPredicate: modifica la predicate prima di pushare l'intention
 //     (es. stack_size, zero_delivery, bonus_delivery)
 const activeRules = {};
+// Esponiamo le regole nei beliefs così che moves.js (consegna automatica) e
+// plans.js (piano Deliver) possano consegnare in stack di N. main.js non le
+// imposta → beliefs.activeRules resta undefined e il comportamento è quello
+// normale (consegna tutto).
+beliefs.activeRules = activeRules;
 
 // Reprint coalescato della mappa quando cambiano le zone vietate (così non
 // stampiamo 6 mappe per 6 tile installate in fila).
