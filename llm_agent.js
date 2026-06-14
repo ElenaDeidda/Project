@@ -21,7 +21,7 @@
 import OpenAI from 'openai';
 import { initQueue, enqueue } from './mission_queue.js';
 import { parseIntervalMs } from './basic_functions.js';
-import { extractReward } from './mission_evaluator.js';
+import { extractReward, extractMultiplier } from './mission_evaluator.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM — LiteLLM UniTN (come lab8)
@@ -1369,6 +1369,16 @@ async function runMission(missionText, ctx, signal = null) {
             if (r != null && r < 0) {
                 console.log(`[LLM] Missione IGNORATA (trappola: azione atomica con reward ${r}).`);
                 return `Ignorata: trappola auto-lesiva (reward ${r})`;
+            }
+        }
+        // SAFETY NET: una REGOLA con moltiplicatore < 1 è DANNOSA (seguirla
+        // ridurrebbe il reward, es. "stacks of 3 to get 0.3 times the reward").
+        // Non la installiamo. I moltiplicatori ≥ 1 (double/triple/2x) restano.
+        if (intent.family === 'rule') {
+            const mult = extractMultiplier(missionText);
+            if (mult != null && mult < 1) {
+                console.log(`[LLM] Regola IGNORATA (moltiplicatore ${mult} < 1: seguirla ridurrebbe il reward).`);
+                return `Ignorata: regola dannosa (moltiplicatore ${mult}x < 1)`;
             }
         }
     }

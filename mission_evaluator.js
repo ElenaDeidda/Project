@@ -63,6 +63,25 @@ export function extractReward(text) {
 
 
 /**
+ * Estrae un MOLTIPLICATORE del reward dal testo ("double"→2, "triple"→3,
+ * "halve/half"→0.5, "0.3 times"→0.3, "2x"→2). Serve a capire se una regola
+ * CONVIENE (≥1) o è DANNOSA (<1, riduce il reward). null se non c'è.
+ * @returns {number|null}
+ */
+export function extractMultiplier(text) {
+    const t = String(text).toLowerCase();
+    if (/\bhalve\b|\bhalf\b/.test(t))   return 0.5;
+    if (/\bquadrupl/.test(t))           return 4;
+    if (/\btripl/.test(t))              return 3;
+    if (/\bdoubl/.test(t))              return 2;
+    // "0.3 times", "2x", "1.5 times the reward"
+    const m = t.match(/(\d+(?:\.\d+)?)\s*(?:x\b|times\b)/);
+    if (m) return parseFloat(m[1]);
+    return null;
+}
+
+
+/**
  * Stima la distanza/costo per completare la missione.
  * Cerca coordinate target nel testo e calcola la distanza dall'agente.
  * @returns {number}  passi stimati (0 se nessun movimento richiesto)
