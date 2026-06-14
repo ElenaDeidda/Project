@@ -173,23 +173,25 @@ function shouldDeliver() {
     const stackN = stackSizeEffective();   // null se nessuna regola stack_size
 
     // ─── max_deliver_reward: consegnare un pacco > T dà 0 ────────────────────
-    // Strategia (timing sul decay): TENGO i pacchi finché decadono verso T e
-    // PARTO verso la delivery col tempismo giusto, così arrivo quando il pacco
-    // più alto è ~T (e quindi consegnabile al massimo valore). La consegna
-    // selettiva (solo i pacchi ≤ T) la fanno moves.js/plans.js via deliverableIds.
+    // Strategia "a pacco": consegno OGNI pacco nell'istante in cui decade a ~T
+    // (massimo valore consentito). Il trigger guarda il pacco PIÙ BASSO (il più
+    // vicino a T, cioè il più urgente): quando arriverà a ≤ T parto verso la
+    // delivery. La consegna selettiva (moves.js/plans.js via deliverableIds)
+    // molla TUTTI i ≤ T e TIENE i > T per il giro successivo, così ogni pacco
+    // esce a ~T e i piccoli non decadono fino a 0 aspettando i grandi.
     const delT = maxDeliverEffective();
     if (delT != null) {
         if (deliverLatch) return true;
-        const maxValue = beliefs.carriedParcels.reduce((m, p) => Math.max(m, p.reward ?? 0), 0);
+        const minValue = beliefs.carriedParcels.reduce((m, p) => Math.min(m, p.reward ?? 0), Infinity);
         const dist = nearestDeliveryDist(beliefs.me, beliefs.deliveryPoints);
         const decayTravel = decayPerStep() * (Number.isFinite(dist) ? dist : 0);
-        // Parto quando il pacco più alto ARRIVERÀ a ≤ T (valore − decadimento in viaggio).
-        if (maxValue - decayTravel <= delT) {
-            logDeliverRule(`max_deliver=${delT}: pacco più alto ${maxValue.toFixed(0)} → all'arrivo ~${(maxValue - decayTravel).toFixed(0)} ≤ ${delT} → PARTO e consegno i ≤${delT}`);
+        // Parto quando il pacco più basso ARRIVERÀ a ≤ T (valore − decadimento in viaggio).
+        if (minValue - decayTravel <= delT) {
+            logDeliverRule(`max_deliver=${delT}: pacco più basso ${minValue.toFixed(0)} → all'arrivo ~${(minValue - decayTravel).toFixed(0)} ≤ ${delT} → PARTO e consegno i ≤${delT} (tengo i >${delT})`);
             deliverReason = 'threshold';
             return (deliverLatch = true);
         }
-        logDeliverRule(`max_deliver=${delT}: pacco più alto ${maxValue.toFixed(0)} (all'arrivo ~${(maxValue - decayTravel).toFixed(0)} > ${delT}) → tengo e continuo a raccogliere`);
+        logDeliverRule(`max_deliver=${delT}: pacco più basso ${minValue.toFixed(0)} ancora > ${delT} (all'arrivo ~${(minValue - decayTravel).toFixed(0)}) → tengo tutto e raccolgo`);
         return false;
     }
 
