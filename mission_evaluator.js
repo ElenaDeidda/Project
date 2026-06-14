@@ -77,9 +77,9 @@ export function extractMultiplier(text) {
     if (/\btripl/.test(t))              return 3;
     if (/\bdoubl/.test(t))              return 2;
     // "0.3 times", "2x", "1.5 times the reward"
+    let m = t.match(/(\d+(?:\.\d+)?)\s*(?:x\b|times\b)/);
 
     if (m) return parseFloat(m[1]);
-
     // "0.3 of the (standard/normal/full) reward", anche senza spazio ("0.3of")
     m = t.match(/(\d+(?:\.\d+)?)\s*of\s+(?:the\s+|its\s+|a\s+)?(?:standard\s+|normal\s+|original\s+|full\s+|usual\s+|base\s+)?reward/);
     if (m) return parseFloat(m[1]);
