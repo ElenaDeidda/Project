@@ -136,32 +136,11 @@ function carriedValue() {
 function shouldDeliver() {
     if (!isCarrying()) { resetCollection(); return false; }
 
-    // ─── Vincolo stack_size: consegna in stack di ESATTAMENTE N ──────────────
-    // Se porto N → consegno subito (non aspetto di accumularne altri). Se porto
-    // < N → continuo a RACCOGLIERE con la normale logica del BDI (pickup +
-    // pattugliamento spawn con rotazione delle zone esauste), così la ricerca
-    // del N° pacco usa la STESSA logica del BDI. Consegno un parziale solo se
-    // resto in stallo (nessun pickup per NO_PICKUP_TIMEOUT) → non resto bloccato.
-    const stackN = stackSizeEffective();
-    if (stackN != null) {
-        const now   = Date.now();
-        const count = beliefs.carriedParcels.length;
-        if (lastPickupTime === null || count > prevCarriedCount) lastPickupTime = now;
-        if (count < prevCarriedCount) deliverLatch = false;   // consegna avvenuta → ri-valuto
-        prevCarriedCount = count;
+    // Consegna PARZIALE avvenuta (count calato ma porto ancora qualcosa, es.
+    // stack selettivo) → azzero commit e picco di valore e ri-valuto da capo.
+    if (beliefs.carriedParcels.length < prevCarriedCount) { deliverLatch = false; batchPeak = 0; }
 
-        if (count >= stackN) {
-            logStackOpt(`porto ${count} ≥ ${stackN} → CONSEGNO subito (stack di ${stackN})`);
-            return (deliverLatch = true);
-        }
-        if (now - lastPickupTime > NO_PICKUP_TIMEOUT) {
-            logStackOpt(`porto ${count}/${stackN}, nessun pickup da ${NO_PICKUP_TIMEOUT / 1000}s → consegno il parziale (non resto bloccato)`);
-            return (deliverLatch = true);
-        }
-        logStackOpt(`porto ${count}/${stackN} → continuo a raccogliere (cerco il ${stackN}° con la pattuglia del BDI)`);
-        deliverLatch = false;
-        return false;
-    }
+    const stackN = stackSizeEffective();   // null se nessuna regola stack_size
 
     // Inizializzazione una-tantum di N dalla config
     if (N_current === null) {
@@ -191,23 +170,41 @@ function shouldDeliver() {
         return (deliverLatch = true);
     }
 
-    // 2. Trigger: troppo tempo senza raccogliere nuovi pacchi → consegna + abbassa N
-    if (now - lastPickupTime > NO_PICKUP_TIMEOUT) {
+    // 2. Trigger: troppo tempo senza raccogliere nuovi pacchi → consegna + abbassa N.
+    //    SALTATO in modalità stack: lì il fallback per consegnare un parziale è il
+    //    DECAY (trigger 3), non un timeout fisso.
+    if (stackN == null && now - lastPickupTime > NO_PICKUP_TIMEOUT) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
         console.log(`[OPTIONS] ${NO_PICKUP_TIMEOUT}ms senza pickup → consegna, N = ${N_current.toFixed(1)}`);
         deliverReason = 'trigger';
         return (deliverLatch = true);
     }
 
-    // 3. Trigger: valore decaduto sotto soglia rispetto al picco → consegna + abbassa N
+    // 3. Trigger: valore decaduto sotto soglia rispetto al picco → consegna.
+    //    Vale ANCHE in modalità stack: è il fallback "consegna prima di perdere
+    //    troppi punti" (coerente col BDI, niente numero magico).
     if (batchPeak > 0 && value < batchPeak * DECAY_THRESHOLD) {
-        N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna, N = ${N_current.toFixed(1)}`);
+        if (stackN == null) N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
+        console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna${stackN != null ? ' (parziale, stack)' : `, N = ${N_current.toFixed(1)}`}`);
         deliverReason = 'trigger';
         return (deliverLatch = true);
     }
 
-    // 4. Soglia di accumulo. Se un delivery è nel raggio visivo, consegnare
+    // 4. SOGLIA DI ACCUMULO.
+    //    Stack: consegna per COUNT (N pacchi). Se non arrivo a N continuo a
+    //    raccogliere (pattuglia del BDI); il parziale lo consegnano i trigger 1
+    //    (capacità) e 3 (decay) qui sopra.
+    if (stackN != null) {
+        if (count >= stackN) {
+            logStackOpt(`porto ${count} ≥ ${stackN} → CONSEGNO (stack di ${stackN})`);
+            deliverReason = 'threshold';
+            return (deliverLatch = true);
+        }
+        logStackOpt(`porto ${count}/${stackN} → continuo a raccogliere (pattuglia BDI; parziale solo su capacità/decay)`);
+        return false;
+    }
+
+    // Normale: soglia per VALORE. Se un delivery è nel raggio visivo, consegnare
     //    costa poco: abbassa la soglia EFFETTIVA (senza toccare N_current, così
     //    l'apprendimento di N resta pulito) e consegna più spesso.
     const obsDist      = beliefs.config.GAME?.player?.observation_distance ?? 5;
