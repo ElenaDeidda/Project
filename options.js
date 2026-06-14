@@ -73,6 +73,18 @@ function aParcelDecayedTooMuch() {
     return false;
 }
 
+// max_deliver_reward = T: consegnare un pacco che vale > T dà 0. null se assente.
+function maxDeliverEffective() {
+    const v = beliefs.activeRules?.maxDeliverReward;
+    return typeof v === 'number' ? v : null;
+}
+let _lastDeliverRuleLog = '';
+function logDeliverRule(msg) {
+    if (msg === _lastDeliverRuleLog) return;
+    _lastDeliverRuleLog = msg;
+    console.log(`[DELIVER-RULE] ${msg}`);
+}
+
 
 // Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
 // così i due ragionano sullo stesso "valore nel tempo".
@@ -159,6 +171,27 @@ function shouldDeliver() {
     if (beliefs.carriedParcels.length < prevCarriedCount) { deliverLatch = false; batchPeak = 0; }
 
     const stackN = stackSizeEffective();   // null se nessuna regola stack_size
+
+    // ─── max_deliver_reward: consegnare un pacco > T dà 0 ────────────────────
+    // Strategia (timing sul decay): TENGO i pacchi finché decadono verso T e
+    // PARTO verso la delivery col tempismo giusto, così arrivo quando il pacco
+    // più alto è ~T (e quindi consegnabile al massimo valore). La consegna
+    // selettiva (solo i pacchi ≤ T) la fanno moves.js/plans.js via deliverableIds.
+    const delT = maxDeliverEffective();
+    if (delT != null) {
+        if (deliverLatch) return true;
+        const maxValue = beliefs.carriedParcels.reduce((m, p) => Math.max(m, p.reward ?? 0), 0);
+        const dist = nearestDeliveryDist(beliefs.me, beliefs.deliveryPoints);
+        const decayTravel = decayPerStep() * (Number.isFinite(dist) ? dist : 0);
+        // Parto quando il pacco più alto ARRIVERÀ a ≤ T (valore − decadimento in viaggio).
+        if (maxValue - decayTravel <= delT) {
+            logDeliverRule(`max_deliver=${delT}: pacco più alto ${maxValue.toFixed(0)} → all'arrivo ~${(maxValue - decayTravel).toFixed(0)} ≤ ${delT} → PARTO e consegno i ≤${delT}`);
+            deliverReason = 'threshold';
+            return (deliverLatch = true);
+        }
+        logDeliverRule(`max_deliver=${delT}: pacco più alto ${maxValue.toFixed(0)} (all'arrivo ~${(maxValue - decayTravel).toFixed(0)} > ${delT}) → tengo e continuo a raccogliere`);
+        return false;
+    }
 
     // Inizializzazione una-tantum di N dalla config
     if (N_current === null) {
