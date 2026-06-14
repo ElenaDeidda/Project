@@ -117,12 +117,14 @@ export function evaluateMission(missionText, beliefs) {
     //    (es. "no reward if ..." che è comunque utile installare per evitare
     //    sprechi di tempo su pacchi che non danno punti).
     if (isL2) {
-        // Strict trap: reward esplicitamente negativo → la regola è dannosa,
-        // ma installarla è comunque innocuo (es. forbidden_tile). Diamo priorità
-        // alta anche in questo caso perché EVITA perdite future.
-        const priority = 30;
-        return { worth: true, priority, reward, cost,
-                 reason: `regola L2 persistente (pri=${priority})` };
+        // Regola persistente = URGENTE (va installata subito) e a COSTO ~0
+        // (l'LLM chiama solo set_rule, niente viaggio: ignoriamo `cost`).
+        // Priorità per MAGNITUDINE: |reward| (evitare −1000 ≈ guadagnare +1000),
+        // con una base alta di default quando il numero non è dichiarato.
+        const mag = reward != null ? Math.abs(reward) : null;
+        const priority = mag != null ? Math.max(30, mag) : 30;
+        return { worth: true, priority, urgent: true, reward, cost,
+                 reason: `regola L2 (URGENTE, magnitudine=${mag ?? '—'}, pri=${priority})` };
     }
 
     // NOTA (policy "esegui sempre"): la coda NON cestina più le missioni. La
