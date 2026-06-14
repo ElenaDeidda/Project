@@ -253,6 +253,15 @@ function redirectAwayFromDeliver(beliefs) {
     return ['go_to_spawn'];   // fallback solo se proprio non c'è altro
 }
 
+// Log diagnostico dello stack (tag [STACK], NON filtrato). Deduplica i messaggi
+// consecutivi identici per non spammare a ogni tick.
+let _lastStackLog = '';
+function logStack(msg) {
+    if (msg === _lastStackLog) return;
+    _lastStackLog = msg;
+    console.log(`[STACK] ${msg}`);
+}
+
 function applyRulesToPredicate(predicate) {
     if (!predicate) return predicate;
     const [action, ...args] = predicate;
@@ -272,13 +281,13 @@ function applyRulesToPredicate(predicate) {
             const p = nearestVisibleFreeParcel(beliefs);
             if (p) {
                 const alt = ['go_pick_up', Math.round(p.x), Math.round(p.y), p.id, p.reward];
-                console.log(`[RULES] stackSize=${N}: porto ${carried} → prendo un altro pacco (${alt[1]},${alt[2]})`);
+                logStack(`deliver chiesto: porto ${carried}/${N} (cap=${cap ?? '?'}) → prendo un altro pacco @(${alt[1]},${alt[2]})`);
                 return alt;
             }
-            // nessun pacco raggiungibile: consegno quello che ho (se ne ho).
-            console.log(`[RULES] stackSize=${N}: porto ${carried}, nessun pacco vicino → consegno comunque`);
+            logStack(`deliver chiesto: porto ${carried}/${N} (cap=${cap ?? '?'}), nessun pacco visibile → CONSEGNO comunque`);
             return predicate;
         }
+        logStack(`deliver chiesto: porto ${carried}/${N} → stack pieno, CONSEGNO`);
     }
 
     // zero_delivery: la tile target è vietata → ne scelgo un'altra (la più
