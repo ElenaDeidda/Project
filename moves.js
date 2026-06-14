@@ -183,7 +183,9 @@ async function opportunisticActions(me, socket) {
             if (dropped && dropped.length > 0) {
                 beliefs.carrying       = false;
                 beliefs.carriedParcels = [];
-                // console.log(`[MOVES] delivery opportunistica: ${dropped.length} pacchi @ (${x},${y})`);
+                // [OPP] non filtrato: mostra le consegne AUTOMATICHE durante gli
+                // spostamenti (svuotano lo stack parziale → utile per il debug).
+                console.log(`[OPP] delivery automatica: ${dropped.length} pacchi @ (${x},${y})`);
             }
         }
     }
