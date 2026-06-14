@@ -178,14 +178,25 @@ async function opportunisticActions(me, socket) {
     if (beliefs.carrying || beliefs.carriedParcels.length > 0) {
         const onDelivery = beliefs.deliveryPoints.some(d => d.x === x && d.y === y);
         if (onDelivery) {
-            const ids     = beliefs.carriedParcels.map(p => p.id);
+            // stack_size attivo → consegna in stack di ESATTAMENTE N:
+            //   • se porto < N → NON consegno (aspetto di averne N, niente
+            //     consegne parziali che perdono il bonus);
+            //   • se porto ≥ N → consegno solo N (i più ricchi), tengo il resto.
+            const N = beliefs.activeRules?.stackSize;
+            let ids = beliefs.carriedParcels.map(p => p.id);
+            if (Number.isInteger(N)) {
+                if (beliefs.carriedParcels.length < N) return;   // sotto soglia → non consegnare
+                ids = [...beliefs.carriedParcels]
+                    .sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0))
+                    .slice(0, N)
+                    .map(p => p.id);
+            }
             const dropped = await socket.emitPutdown(ids.length > 0 ? ids : undefined);
             if (dropped && dropped.length > 0) {
-                beliefs.carrying       = false;
-                beliefs.carriedParcels = [];
-                // [OPP] non filtrato: mostra le consegne AUTOMATICHE durante gli
-                // spostamenti (svuotano lo stack parziale → utile per il debug).
-                console.log(`[OPP] delivery automatica: ${dropped.length} pacchi @ (${x},${y})`);
+                const set = new Set(ids);
+                beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
+                beliefs.carrying = beliefs.carriedParcels.length > 0;
+                console.log(`[OPP] delivery automatica: ${dropped.length} pacchi @ (${x},${y})${Number.isInteger(N) ? ` (stack di ${N}, restano ${beliefs.carriedParcels.length})` : ''}`);
             }
         }
     }

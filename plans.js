@@ -159,12 +159,25 @@ export class Deliver extends PlanBase {
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
         if (this.stopped) throw ['stopped'];
 
-        const ids     = beliefs.carriedParcels.map(p => p.id);
+        // stack_size: se ne porto ≥ N consegno ESATTAMENTE N (i più ricchi) e
+        // tengo il resto per lo stack successivo; se ne porto < N consegno tutto
+        // (fallback pragmatico: il BDI ha deciso di consegnare e non c'è di meglio).
+        const N = beliefs.activeRules?.stackSize;
+        let ids;
+        if (Number.isInteger(N) && beliefs.carriedParcels.length >= N) {
+            ids = [...beliefs.carriedParcels]
+                .sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0))
+                .slice(0, N)
+                .map(p => p.id);
+        } else {
+            ids = beliefs.carriedParcels.map(p => p.id);
+        }
         const dropped = await this.#socket.emitPutdown(ids.length > 0 ? ids : undefined);
 
-        beliefs.carrying       = false;
-        beliefs.carriedParcels = [];
-        console.log(`[PLANS] Depositati ${dropped?.length ?? '?'} pacchi. Score: ${beliefs.me.score}`);
+        const set = new Set(ids);
+        beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
+        beliefs.carrying       = beliefs.carriedParcels.length > 0;
+        console.log(`[PLANS] Depositati ${dropped?.length ?? '?'} pacchi${Number.isInteger(N) ? ` (stack di ${N}, restano ${beliefs.carriedParcels.length})` : ''}. Score: ${beliefs.me.score}`);
         return true;
     }
 }
