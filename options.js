@@ -55,6 +55,24 @@ function logStackOpt(msg) {
     console.log(`[STACK] ${msg}`);
 }
 
+// Fallback dello stack "consegna comunque": se un pacco è sceso di questa
+// frazione rispetto al valore con cui è stato RACCOLTO, consegna il parziale
+// (per non perdere i punti). 0.60 = consegna quando un pacco vale < 40% di
+// quando l'ho preso. Override con STACK_DECAY_DROP nel .env.
+const STACK_DECAY_DROP = Number(process.env.STACK_DECAY_DROP) || 0.60;
+
+// true se almeno un pacco portato è sceso ≥ STACK_DECAY_DROP del suo valore di
+// raccolta (cioè vale < (1 - drop) × originale).
+function aParcelDecayedTooMuch() {
+    const cr = beliefs.collectedReward;
+    if (!cr) return false;
+    for (const p of beliefs.carriedParcels) {
+        const orig = cr.get(p.id);
+        if (orig && orig > 0 && (p.reward ?? 0) < orig * (1 - STACK_DECAY_DROP)) return true;
+    }
+    return false;
+}
+
 
 // Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
 // così i due ragionano sullo stesso "valore nel tempo".
