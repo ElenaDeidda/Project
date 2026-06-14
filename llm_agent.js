@@ -298,8 +298,12 @@ function makeTools(ctx) {
                     if (typeof r.value !== 'number') return 'Error: serve value numerico';
                     rules.maxParcelReward = r.value;
                     return `Regola installata: maxParcelReward=${r.value}`;
+                case 'max_deliver_reward':
+                    if (typeof r.value !== 'number') return 'Error: serve value numerico';
+                    rules.maxDeliverReward = r.value;
+                    return `Regola installata: maxDeliverReward=${r.value}`;
                 default:
-                    return `Error: tipo sconosciuto "${r.type}". Validi: stack_size, forbidden_tile, zero_delivery, bonus_delivery, max_parcel_reward`;
+                     return `Error: tipo sconosciuto "${r.type}". Validi: stack_size, forbidden_tile, zero_delivery, bonus_delivery, max_parcel_reward, max_deliver_reward`;
             }
         },
 
@@ -313,11 +317,12 @@ function makeTools(ctx) {
                 return 'Tutte le regole cancellate';
             }
             const map = {
-                stack_size:        'stackSize',
-                forbidden_tile:    'forbiddenTiles',
-                zero_delivery:     'zeroDeliveries',
-                bonus_delivery:    'bonusDeliveries',
-                max_parcel_reward: 'maxParcelReward',
+                stack_size:         'stackSize',
+                forbidden_tile:     'forbiddenTiles',
+                zero_delivery:      'zeroDeliveries',
+                bonus_delivery:     'bonusDeliveries',
+                max_parcel_reward:  'maxParcelReward',
+                max_deliver_reward: 'maxDeliverReward',
             };
             const key = map[name];
             if (!key) return `Error: nome sconosciuto "${name}"`;
@@ -910,10 +915,12 @@ Schema:
      { "verb": "deliver",        "at": [x,y] | "nearest" }       // drop carried parcels here
   ],
 
-  // family "rule": persistent modifier of normal play (installed via set_rule)
+// family "rule": persistent modifier of normal play (installed via set_rule)
   "rules": [ {"type":"forbidden_tile","x":5,"y":7}, {"type":"stack_size","n":3},
              {"type":"zero_delivery","x":2,"y":2}, {"type":"bonus_delivery","x":3,"y":3},
              {"type":"max_parcel_reward","value":10} ],
+             {"type":"max_parcel_reward","value":10},   // don't PICK UP parcels worth > value
+             {"type":"max_deliver_reward","value":10} ],// DELIVERING a parcel worth > value scores 0 → deliver only parcels <= value
   "validity": { "scope": "match" },   // default = whole game; or {"scope":"until_signal","match":"green light"} / {"scope":"duration_ms","ms":30000}
 
   // family "reactive": conditional/temporal behaviour driven by signals/messages
@@ -957,6 +964,9 @@ Mission: "Don't cross 1,1 to get 100pts"
 
 Mission: "Deliver in stacks of exactly 3"
 {"family":"rule","rules":[{"type":"stack_size","n":3}],"validity":{"scope":"match"}}
+
+Mission: "If you deliver parcels with a score higher than 10, you get no reward."
+{"family":"rule","reason":"delivering a parcel worth > 10 scores 0","rules":[{"type":"max_deliver_reward","value":10}],"validity":{"scope":"match"}}
 
 Mission: "Stop at red light and wait for the green light message. Bonus is -1000pts."
 {"family":"reactive","reason":"freeze until green light, penalty for moving","reactive":{"behavior":"freeze_movement","until":{"signal":"message","match":"green"},"penalty":-1000}}

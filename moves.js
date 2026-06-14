@@ -1,5 +1,5 @@
 import { getDirection } from './basic_functions.js';
-import { getBlockedCells, beliefs } from './beliefs.js';
+import { getBlockedCells, beliefs, deliverableIds } from './beliefs.js';
 
 function heuristic(a, b) {
     return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
@@ -178,25 +178,21 @@ async function opportunisticActions(me, socket) {
     if (beliefs.carrying || beliefs.carriedParcels.length > 0) {
         const onDelivery = beliefs.deliveryPoints.some(d => d.x === x && d.y === y);
         if (onDelivery) {
-            // stack_size attivo → consegna in stack di ESATTAMENTE N:
-            //   • se porto < N → NON consegno (aspetto di averne N, niente
-            //     consegne parziali che perdono il bonus);
-            //   • se porto ≥ N → consegno solo N (i più ricchi), tengo il resto.
+            // stack_size puro: NON consegno un parziale mentre passo (aspetto di
+            // avere N). Con max_deliver_reward invece i pacchi ≤ soglia sono
+            // "pronti" → li consegno appena passo (non li tengo a decadere).
             const N = beliefs.activeRules?.stackSize;
-            let ids = beliefs.carriedParcels.map(p => p.id);
-            if (Number.isInteger(N)) {
-                if (beliefs.carriedParcels.length < N) return;   // sotto soglia → non consegnare
-                ids = [...beliefs.carriedParcels]
-                    .sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0))
-                    .slice(0, N)
-                    .map(p => p.id);
-            }
-            const dropped = await socket.emitPutdown(ids.length > 0 ? ids : undefined);
+            const hasMaxDeliver = typeof beliefs.activeRules?.maxDeliverReward === 'number';
+            if (Number.isInteger(N) && !hasMaxDeliver && beliefs.carriedParcels.length < N) return;
+
+            const ids = deliverableIds(beliefs);   // rispetta max_deliver_reward + stack_size
+            if (ids.length === 0) return;
+            const dropped = await socket.emitPutdown(ids);
             if (dropped && dropped.length > 0) {
                 const set = new Set(ids);
                 beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
                 beliefs.carrying = beliefs.carriedParcels.length > 0;
-                console.log(`[OPP] delivery automatica: ${dropped.length} pacchi @ (${x},${y})${Number.isInteger(N) ? ` (stack di ${N}, restano ${beliefs.carriedParcels.length})` : ''}`);
+                console.log(`[OPP] delivery automatica: ${dropped.length} pacchi @ (${x},${y}) (restano ${beliefs.carriedParcels.length})`);
             }
         }
     }

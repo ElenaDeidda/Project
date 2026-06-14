@@ -74,6 +74,20 @@ function aParcelDecayedTooMuch() {
 }
 
 
+// max_deliver_reward = T: consegnare un pacco che vale > T dà 0. null se assente.
+function maxDeliverEffective() {
+    const v = beliefs.activeRules?.maxDeliverReward;
+    return typeof v === 'number' ? v : null;
+}
+let _lastDeliverRuleLog = '';
+function logDeliverRule(msg) {
+    if (msg === _lastDeliverRuleLog) return;
+    _lastDeliverRuleLog = msg;
+    console.log(`[DELIVER-RULE] ${msg}`);
+}
+
+
+
 // Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
 // così i due ragionano sullo stesso "valore nel tempo".
 function decayMsFromConfig() {

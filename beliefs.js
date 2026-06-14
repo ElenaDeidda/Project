@@ -253,3 +253,23 @@ export function getAgentPositions() {
     //console.log(`[getAgentPositions] posizioni note:`, out);
     return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quali pacchi consegnare DAVVERO in base alle regole attive (beliefs.activeRules,
+// impostato dal processo LLM; in main.js è undefined → si consegna tutto):
+//   - max_deliver_reward = T → solo i pacchi che valgono ≤ T (consegnarne uno > T
+//     darebbe 0 → lo si tiene finché decade nel range);
+//   - stack_size = N         → al massimo N (i più ricchi tra i consegnabili);
+//   - nessuna regola         → tutti i pacchi portati.
+// Ritorna la lista di id da passare a emitPutdown.
+// ─────────────────────────────────────────────────────────────────────────────
+export function deliverableIds(beliefs) {
+    let parcels = beliefs.carriedParcels ?? [];
+    const T = beliefs.activeRules?.maxDeliverReward;
+    if (typeof T === 'number') parcels = parcels.filter(p => (p.reward ?? 0) <= T);
+    const N = beliefs.activeRules?.stackSize;
+    if (Number.isInteger(N) && parcels.length >= N) {
+        parcels = [...parcels].sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0)).slice(0, N);
+    }
+    return parcels.map(p => p.id);
+}
