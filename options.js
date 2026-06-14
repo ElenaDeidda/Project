@@ -55,6 +55,24 @@ function logStackOpt(msg) {
     console.log(`[STACK] ${msg}`);
 }
 
+// Fallback dello stack "consegna comunque": se un pacco è sceso di questa
+// frazione rispetto al valore con cui è stato RACCOLTO, consegna il parziale
+// (per non perdere i punti). 0.60 = consegna quando un pacco vale < 40% di
+// quando l'ho preso. Override con STACK_DECAY_DROP nel .env.
+const STACK_DECAY_DROP = Number(process.env.STACK_DECAY_DROP) || 0.60;
+
+// true se almeno un pacco portato è sceso ≥ STACK_DECAY_DROP del suo valore di
+// raccolta (cioè vale < (1 - drop) × originale).
+function aParcelDecayedTooMuch() {
+    const cr = beliefs.collectedReward;
+    if (!cr) return false;
+    for (const p of beliefs.carriedParcels) {
+        const orig = cr.get(p.id);
+        if (orig && orig > 0 && (p.reward ?? 0) < orig * (1 - STACK_DECAY_DROP)) return true;
+    }
+    return false;
+}
+
 
 // Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
 // così i due ragionano sullo stesso "valore nel tempo".
@@ -181,26 +199,31 @@ function shouldDeliver() {
     }
 
     // 3. Trigger: valore decaduto sotto soglia rispetto al picco → consegna.
-    //    Vale ANCHE in modalità stack: è il fallback "consegna prima di perdere
-    //    troppi punti" (coerente col BDI, niente numero magico).
-    if (batchPeak > 0 && value < batchPeak * DECAY_THRESHOLD) {
-        if (stackN == null) N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
-        console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna${stackN != null ? ' (parziale, stack)' : `, N = ${N_current.toFixed(1)}`}`);
+    //    SOLO modalità normale: in modalità stack il fallback è per-pacco (sotto).
+    if (stackN == null && batchPeak > 0 && value < batchPeak * DECAY_THRESHOLD) {
+        N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
+        console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco → consegna, N = ${N_current.toFixed(1)}`);
         deliverReason = 'trigger';
         return (deliverLatch = true);
     }
 
     // 4. SOGLIA DI ACCUMULO.
-    //    Stack: consegna per COUNT (N pacchi). Se non arrivo a N continuo a
-    //    raccogliere (pattuglia del BDI); il parziale lo consegnano i trigger 1
-    //    (capacità) e 3 (decay) qui sopra.
+    //    Stack: punta SEMPRE a N pacchi (consegna per COUNT). Se non arrivo a N
+    //    continuo a raccogliere (pattuglia del BDI). "Consegna comunque" solo se
+    //    un pacco è sceso ≥ STACK_DECAY_DROP del suo valore di RACCOLTA (così non
+    //    perdo i punti) — oppure se la capacità è piena (trigger 1 sopra).
     if (stackN != null) {
         if (count >= stackN) {
             logStackOpt(`porto ${count} ≥ ${stackN} → CONSEGNO (stack di ${stackN})`);
             deliverReason = 'threshold';
             return (deliverLatch = true);
         }
-        logStackOpt(`porto ${count}/${stackN} → continuo a raccogliere (pattuglia BDI; parziale solo su capacità/decay)`);
+        if (aParcelDecayedTooMuch()) {
+            logStackOpt(`porto ${count}/${stackN} ma un pacco è sceso ≥${(STACK_DECAY_DROP * 100) | 0}% del valore di raccolta → CONSEGNO il parziale`);
+            deliverReason = 'trigger';
+            return (deliverLatch = true);
+        }
+        logStackOpt(`porto ${count}/${stackN} → continuo a raccogliere (punto a ${stackN})`);
         return false;
     }
 
