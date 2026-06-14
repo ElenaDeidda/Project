@@ -6,6 +6,8 @@ export const beliefs = {
     config:         {},
     mapTiles:       new Map(),
     isDirectionalMap: false,
+    isCrateMap:     false,
+    crateTiles:     new Map(),   // "x_y" → {x, y}
     deliveryPoints: [],
     parcels:        new Map(),
     agents:         new Map(),   // id → { x, y, moving, direction, targetX, targetY }
@@ -30,8 +32,12 @@ export function updateMap(width, height, tiles) {
         beliefs.mapTiles.set(key, { type: String(tile.type) });
         if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
         if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
+        if (tile.type === '5!') {
+            beliefs.isCrateMap = true;
+            beliefs.crateTiles.set(key, { x: tile.x, y: tile.y });
+        }
         //console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
-        
+
     }
 
     // --- 2. Precalcola spawnVisibility ---
