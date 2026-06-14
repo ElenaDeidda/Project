@@ -63,9 +63,11 @@ export function extractReward(text) {
 
 
 /**
- * Estrae un MOLTIPLICATORE del reward dal testo ("double"→2, "triple"→3,
- * "halve/half"→0.5, "0.3 times"→0.3, "2x"→2). Serve a capire se una regola
- * CONVIENE (≥1) o è DANNOSA (<1, riduce il reward). null se non c'è.
+ * Estrae un MOLTIPLICATORE del reward dal testo
+ *  ("double"→2, "triple"→3,
+ *  * "halve/half"→0.5, "0.3 times"→0.3, "2x"→2, "0.3 of the reward"→0.3). Serve a
+ * capire se una regola CONVIENE (≥1) o è DANNOSA (<1, riduce il reward). null se
+ * non c'è.
  * @returns {number|null}
  */
 export function extractMultiplier(text) {
@@ -75,8 +77,15 @@ export function extractMultiplier(text) {
     if (/\btripl/.test(t))              return 3;
     if (/\bdoubl/.test(t))              return 2;
     // "0.3 times", "2x", "1.5 times the reward"
-    const m = t.match(/(\d+(?:\.\d+)?)\s*(?:x\b|times\b)/);
+
     if (m) return parseFloat(m[1]);
+
+    // "0.3 of the (standard/normal/full) reward", anche senza spazio ("0.3of")
+    m = t.match(/(\d+(?:\.\d+)?)\s*of\s+(?:the\s+|its\s+|a\s+)?(?:standard\s+|normal\s+|original\s+|full\s+|usual\s+|base\s+)?reward/);
+    if (m) return parseFloat(m[1]);
+    // "X% of the reward" → frazione
+    m = t.match(/(\d+(?:\.\d+)?)\s*%\s*of\s+(?:the\s+)?(?:standard\s+|normal\s+)?reward/);
+    if (m) return parseFloat(m[1]) / 100;
     return null;
 }
 
