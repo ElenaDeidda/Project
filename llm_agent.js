@@ -1196,10 +1196,24 @@ async function executeStep(step, ctx, signal = null) {
                     if (!d) return fail('nessuna delivery tile nota');
                     c = { x: d.x, y: d.y };
                 }
+                const carriedBefore = beliefs.carriedParcels?.length ?? 0;
                 const nav = await tools.navigate_to(`${c.x},${c.y}`);
                 if (isErr(nav)) return fail(nav);
+                // Durante il tragitto (e soprattutto arrivando sulla delivery tile)
+                // `opportunisticActions` consegna automaticamente i pacchi. Quindi
+                // se portavo qualcosa e ora non porto più, LA CONSEGNA È AVVENUTA:
+                // è un SUCCESSO, non "Niente da consegnare". (Era questo il bug del
+                // "lo fa ma pensa di non averlo fatto".)
+                const carriedNow = beliefs.carriedParcels?.length ?? 0;
+                if (carriedBefore > 0 && carriedNow === 0) {
+                    console.log(`[LLM-EXEC] consegna già avvenuta arrivando a (${c.x},${c.y}): ${carriedBefore} pacchi`);
+                    return ok(`${nav}; consegnati ${carriedBefore} pacchi (arrivando a destinazione)`);
+                }
                 const drop = await tools.putdown();
-                if (/Niente da consegnare/i.test(drop)) return fail(`${nav}; ma ${drop}`);
+                if (/Niente da consegnare/i.test(drop)) {
+                    // Non portavo nulla all'inizio e niente da consegnare → vero fallimento.
+                    return fail(`${nav}; ma ${drop}`);
+                }
                 return ok(`${nav}; ${drop}`);
             }
 
