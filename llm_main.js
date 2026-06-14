@@ -267,32 +267,77 @@ function logStack(msg) {
     console.log(`[STACK] ${msg}`);
 }
 
+// Delivery point più vicino a me (null se non ne conosco).
+function nearestDeliveryPoint(beliefs) {
+    const dps = beliefs.deliveryPoints ?? [];
+    if (dps.length === 0) return null;
+    const me = beliefs.me ?? { x: 0, y: 0 };
+    let best = null, bestD = Infinity;
+    for (const d of dps) {
+        const dist = Math.abs(d.x - me.x) + Math.abs(d.y - me.y);
+        if (dist < bestD) { best = d; bestD = dist; }
+    }
+    return best;
+}
+
+// Stack: quanto tempo provare a raggiungere N (cercando su spawn tile) prima di
+// arrendersi e consegnare quello che si ha. Evita lo stallo "non consegno mai".
+const STACK_GATHER_TIMEOUT_MS = Number(process.env.STACK_GATHER_TIMEOUT_MS) || 8000;
+let _stackStuckSince = null;
+
 function applyRulesToPredicate(predicate) {
     if (!predicate) return predicate;
     const [action, ...args] = predicate;
 
-    // stack_size (modalità PRAGMATICA): consegna in stack di N quando puoi, ma
-    // NON impazzire se non ci arrivi. Il BDI vuole consegnare e porto < N →
-    //   • se vedo un pacco libero VICINO (raggiungibile) → vado a prenderlo per
-    //     arrivare a N;
-    //   • altrimenti consegno comunque quello che ho (niente vagare all'infinito,
-    //     niente inseguire fantasmi). Perdo solo il bonus "x2" in quel caso.
-    // N è limitato alla capacità (non posso portarne più di così).
-    if (Number.isInteger(activeRules.stackSize) && action === 'deliver') {
+    // ─── stack_size: consegna in stack di ESATTAMENTE N ──────────────────────
+    // Obiettivo: se POSSO fare N, faccio N. Quindi:
+    //   (1) appena ho ≥ N → CONSEGNO subito (non aspetto di accumularne altri);
+    //   (2) il BDI vuole consegnare ma ho < N → provo ad arrivare a N: prendo un
+    //       pacco visibile, oppure vado a CERCARNE su una spawn tile; solo se non
+    //       ci riesco entro STACK_GATHER_TIMEOUT_MS consegno quello che ho (così
+    //       non resto mai bloccato senza consegnare).
+    // N è limitato alla capacità.
+    if (Number.isInteger(activeRules.stackSize)) {
         const cap = beliefs.config?.GAME?.player?.capacity;
         const N = Number.isInteger(cap) ? Math.min(activeRules.stackSize, cap) : activeRules.stackSize;
         const carried = beliefs.carriedParcels?.length ?? 0;
-        if (carried < N) {
+
+        // (1) Ho già N → consegna SUBITO invece di continuare a raccogliere.
+        if (carried >= N && (action === 'go_pick_up' || action === 'go_to_spawn')) {
+            const d = nearestDeliveryPoint(beliefs);
+            if (d) {
+                _stackStuckSince = null;
+                logStack(`porto ${carried}≥${N} → CONSEGNO subito (niente accumulo)`);
+                return applyRulesToPredicate(['deliver', d.x, d.y]);   // rispetta zero/bonus delivery
+            }
+        }
+
+        // (2) Il BDI vuole consegnare ma porto < N → prova ad arrivare a N.
+        if (action === 'deliver' && carried < N) {
             const p = nearestVisibleFreeParcel(beliefs);
             if (p) {
-                const alt = ['go_pick_up', Math.round(p.x), Math.round(p.y), p.id, p.reward];
-                logStack(`deliver chiesto: porto ${carried}/${N} (cap=${cap ?? '?'}) → prendo un altro pacco @(${alt[1]},${alt[2]})`);
-                return alt;
+                _stackStuckSince = null;
+                logStack(`porto ${carried}/${N} → prendo un altro pacco @(${Math.round(p.x)},${Math.round(p.y)})`);
+                return ['go_pick_up', Math.round(p.x), Math.round(p.y), p.id, p.reward];
             }
-            logStack(`deliver chiesto: porto ${carried}/${N} (cap=${cap ?? '?'}), nessun pacco visibile → CONSEGNO comunque`);
+            // niente in vista: vai a CERCARNE su una spawn tile, finché non scade
+            // il tempo massimo; poi consegna comunque (no stallo).
+            if (_stackStuckSince == null) _stackStuckSince = Date.now();
+            const s = bestSpawnTile(beliefs);
+            if (s && (Date.now() - _stackStuckSince) < STACK_GATHER_TIMEOUT_MS) {
+                logStack(`porto ${carried}/${N}, cerco il ${N}° pacco → spawn (${s.x},${s.y})`);
+                return ['go_to_spawn', s.x, s.y];
+            }
+            _stackStuckSince = null;
+            logStack(`porto ${carried}/${N}, non riesco ad arrivare a ${N} → CONSEGNO comunque`);
             return predicate;
         }
-        logStack(`deliver chiesto: porto ${carried}/${N} → stack pieno, CONSEGNO`);
+
+        // (3) Consegna con stack pieno (la quantità esatta la gestiscono moves/plans).
+        if (action === 'deliver') {
+            _stackStuckSince = null;
+            logStack(`porto ${carried}/${N} → stack pieno, CONSEGNO`);
+        }
     }
 
     // zero_delivery: la tile target è vietata → ne scelgo un'altra (la più
