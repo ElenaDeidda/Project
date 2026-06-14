@@ -175,16 +175,10 @@ async function applyRulesAsActions(socket, beliefs) {
         }
     }
 
-    // stack_size: se ne porto più di N, scarico gli "extra" tenendo gli N
-    // di valore più alto. Compatibile con max_parcel_reward (applicato sopra).
-    if (Number.isInteger(activeRules.stackSize) && carried.length > activeRules.stackSize) {
-        const N = activeRules.stackSize;
-        const stillKept = carried.filter(p => !idsToDrop.has(p.id));
-        if (stillKept.length > N) {
-            const sorted = [...stillKept].sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0));
-            for (const p of sorted.slice(N)) idsToDrop.add(p.id);
-        }
-    }
+    // NB: per stack_size NON scarichiamo più gli "extra" a terra. Buttare via
+    // pacchi già raccolti era sprecone e causava jitter (li ri-raccoglievi
+    // subito). Lo stack è gestito SOLO al momento della consegna (vedi
+    // applyRulesToPredicate, modalità "pragmatica").
 
     if (idsToDrop.size > 0) {
         const ids = [...idsToDrop];
@@ -204,13 +198,29 @@ function isTileOccupiedByEnemy(tile, beliefs) {
     return false;
 }
 
-// Trova il pacco libero più vicino visibile. Null se non ce ne sono.
+// Trova il pacco libero più vicino (anche ricordato/fuori vista). Null se nessuno.
 function nearestFreeParcel(beliefs) {
     const free = [...(beliefs.parcels?.values() ?? [])].filter(p => !p.carriedBy);
     if (free.length === 0) return null;
     free.sort((a, b) =>
         (Math.abs(a.x - beliefs.me.x) + Math.abs(a.y - beliefs.me.y)) -
         (Math.abs(b.x - beliefs.me.x) + Math.abs(b.y - beliefs.me.y)));
+    return free[0];
+}
+
+// Pacco libero ATTUALMENTE VISIBILE (entro obs_distance) più vicino. A differenza
+// di nearestFreeParcel ignora i "fantasmi" ricordati fuori vista: serve allo
+// stack pragmatico per non inseguire pacchi che non ci sono più.
+function nearestVisibleFreeParcel(beliefs) {
+    const me  = beliefs.me ?? { x: 0, y: 0 };
+    const obs = beliefs.config?.GAME?.player?.observation_distance ?? 5;
+    const free = [...(beliefs.parcels?.values() ?? [])]
+        .filter(p => !p.carriedBy)
+        .filter(p => (Math.abs(p.x - me.x) + Math.abs(p.y - me.y)) <= obs);
+    if (free.length === 0) return null;
+    free.sort((a, b) =>
+        (Math.abs(a.x - me.x) + Math.abs(a.y - me.y)) -
+        (Math.abs(b.x - me.x) + Math.abs(b.y - me.y)));
     return free[0];
 }
 
@@ -247,17 +257,27 @@ function applyRulesToPredicate(predicate) {
     if (!predicate) return predicate;
     const [action, ...args] = predicate;
 
-    // stack_size: il BDI vuole consegnare ma porto meno di N → reindirizzo
-    // verso un pickup utile (o una spawn tile vera) per arrivare a N.
-    // Caso "carry > N" è gestito a monte da applyRulesAsActions (scarica gli
-    // extra), quindi qui ci arrivo solo se carry == N (consegno) o carry < N.
+    // stack_size (modalità PRAGMATICA): consegna in stack di N quando puoi, ma
+    // NON impazzire se non ci arrivi. Il BDI vuole consegnare e porto < N →
+    //   • se vedo un pacco libero VICINO (raggiungibile) → vado a prenderlo per
+    //     arrivare a N;
+    //   • altrimenti consegno comunque quello che ho (niente vagare all'infinito,
+    //     niente inseguire fantasmi). Perdo solo il bonus "x2" in quel caso.
+    // N è limitato alla capacità (non posso portarne più di così).
     if (Number.isInteger(activeRules.stackSize) && action === 'deliver') {
-        const N = activeRules.stackSize;
+        const cap = beliefs.config?.GAME?.player?.capacity;
+        const N = Number.isInteger(cap) ? Math.min(activeRules.stackSize, cap) : activeRules.stackSize;
         const carried = beliefs.carriedParcels?.length ?? 0;
         if (carried < N) {
-            const alt = redirectAwayFromDeliver(beliefs);
-            console.log(`[RULES] stackSize=${N}: porto ${carried} → ${alt[0]}(${alt.slice(1).join(',')})`);
-            return alt;
+            const p = nearestVisibleFreeParcel(beliefs);
+            if (p) {
+                const alt = ['go_pick_up', Math.round(p.x), Math.round(p.y), p.id, p.reward];
+                console.log(`[RULES] stackSize=${N}: porto ${carried} → prendo un altro pacco (${alt[1]},${alt[2]})`);
+                return alt;
+            }
+            // nessun pacco raggiungibile: consegno quello che ho (se ne ho).
+            console.log(`[RULES] stackSize=${N}: porto ${carried}, nessun pacco vicino → consegno comunque`);
+            return predicate;
         }
     }
 
