@@ -1,5 +1,5 @@
 // plans.js — Piani eseguibili. Il socket viene passato nel costruttore.
-import { beliefs } from './beliefs.js';
+import { beliefs, deliverableIds } from './beliefs.js';
 import { navigateTo } from './moves.js';
 import { smartDist } from './basic_functions.js';
 import { getPddlPlan, planToMoves } from './pddl_planner.js';
@@ -159,25 +159,16 @@ export class Deliver extends PlanBase {
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
         if (this.stopped) throw ['stopped'];
 
-        // stack_size: se ne porto ≥ N consegno ESATTAMENTE N (i più ricchi) e
-        // tengo il resto per lo stack successivo; se ne porto < N consegno tutto
-        // (fallback pragmatico: il BDI ha deciso di consegnare e non c'è di meglio).
-        const N = beliefs.activeRules?.stackSize;
-        let ids;
-        if (Number.isInteger(N) && beliefs.carriedParcels.length >= N) {
-            ids = [...beliefs.carriedParcels]
-                .sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0))
-                .slice(0, N)
-                .map(p => p.id);
-        } else {
-            ids = beliefs.carriedParcels.map(p => p.id);
-        }
-        const dropped = await this.#socket.emitPutdown(ids.length > 0 ? ids : undefined);
+        // Consegna SELETTIVA secondo le regole attive (max_deliver_reward,
+        // stack_size). Senza regole → tutti i pacchi.
+        const ids = deliverableIds(beliefs);
+        if (ids.length === 0) return true;   // nulla di consegnabile (es. tutti > soglia)
+        const dropped = await this.#socket.emitPutdown(ids);
 
         const set = new Set(ids);
         beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
         beliefs.carrying       = beliefs.carriedParcels.length > 0;
-        console.log(`[PLANS] Depositati ${dropped?.length ?? '?'} pacchi${Number.isInteger(N) ? ` (stack di ${N}, restano ${beliefs.carriedParcels.length})` : ''}. Score: ${beliefs.me.score}`);
+        console.log(`[PLANS] Depositati ${dropped?.length ?? '?'} pacchi (restano ${beliefs.carriedParcels.length}). Score: ${beliefs.me.score}`);
         return true;
     }
 }
