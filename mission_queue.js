@@ -72,17 +72,17 @@ export function enqueue(text, senderId) {
         return;
     }
 
-    // Valutazione "intelligente": se sto già trasportando pacchi che valgono
-    // più di quello che mi darebbe la mission, è meglio continuare il BDI
-    // (consegnare prima di occuparmi della mission). La mission resta in coda
-    // con priorità ridotta in modo che venga ripresa dopo la consegna.
+    // "Damping" in base al carico: se sto già trasportando pacchi che valgono
+    // più della mission, abbasso la sua priorità (meglio consegnare prima). MA
+    // SOLO per mission positive normali — MAI per regole/penalità urgenti (vanno
+    // installate subito) e mai sotto zero.
     let priority = verdict.priority;
     let reasonExtra = '';
-    if (verdict.reward != null && _beliefs?.carriedParcels?.length > 0) {
+    if (!verdict.urgent && verdict.reward != null && verdict.reward > 0
+        && _beliefs?.carriedParcels?.length > 0) {
         const carriedValue = _beliefs.carriedParcels
             .reduce((sum, p) => sum + (p.reward || 0), 0);
         if (carriedValue > verdict.reward) {
-            // Smorza la priorità: la mission deve "battere" il vantaggio del carico
             const ratio = verdict.reward / Math.max(1, carriedValue);
             const newPri = priority * ratio;
             reasonExtra = ` | abbasso pri (porto ${Math.round(carriedValue)}pt > ${verdict.reward}pt mission): ${priority.toFixed(2)} → ${newPri.toFixed(2)}`;
@@ -93,16 +93,21 @@ export function enqueue(text, senderId) {
     const entry = {
         text, senderId,
         priority,
+        urgent: !!verdict.urgent,
         verdict,
         addedAt: Date.now(),
     };
     _queue.push(entry);
-    console.log(`[QUEUE] +"${text}" (pri=${priority.toFixed(2)}) — ${verdict.reason}${reasonExtra}`);
+    console.log(`[QUEUE] +"${text}" (pri=${priority.toFixed(2)}${entry.urgent ? ', URGENTE' : ''}) — ${verdict.reason}${reasonExtra}`);
 
-    // Politica di interruzione: se sto eseguendo e il nuovo arrivato è MOLTO
-    // più conveniente (≥ INTERRUPT_FACTOR×), interrompo la corrente.
-    if (_running && entry.priority >= _running.priority * INTERRUPT_FACTOR) {
-        console.log(`[QUEUE] interrompo corrente (pri=${_running.priority.toFixed(2)}) per nuova (pri=${entry.priority.toFixed(2)})`);
+    // Interruzione: una mission URGENTE (regola/penalità) interrompe subito la
+    // corrente — a meno che la corrente sia a sua volta urgente (non lasciamo
+    // una regola installata a metà). Le mission normali interrompono solo se
+    // MOLTO più convenienti (≥ INTERRUPT_FACTOR×).
+    const canInterrupt = _running && !_running.urgent &&
+        (entry.urgent || entry.priority >= _running.priority * INTERRUPT_FACTOR);
+    if (canInterrupt) {
+        console.log(`[QUEUE] interrompo corrente (pri=${_running.priority.toFixed(2)}) per nuova (pri=${entry.priority.toFixed(2)}${entry.urgent ? ', URGENTE' : ''})`);
         _running.controller.abort();
     }
 }
@@ -164,8 +169,12 @@ function tick() {
     });
     if (_queue.length === 0) return;
 
-    // Scegli la migliore (priorità più alta; a parità, la più vecchia)
-    _queue.sort((a, b) => b.priority - a.priority || a.addedAt - b.addedAt);
+    // Scegli la migliore: prima le URGENTI (regole/penalità), poi per priorità
+    // (magnitudine), a parità la più vecchia.
+    _queue.sort((a, b) =>
+        (b.urgent === true) - (a.urgent === true) ||
+        b.priority - a.priority ||
+        a.addedAt - b.addedAt);
     const best = _queue.shift();
     runOne(best);
 }
