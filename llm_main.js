@@ -213,22 +213,6 @@ function nearestFreeParcel(beliefs) {
     return free[0];
 }
 
-// Pacco libero ATTUALMENTE VISIBILE (entro obs_distance) più vicino. A differenza
-// di nearestFreeParcel ignora i "fantasmi" ricordati fuori vista: serve allo
-// stack pragmatico per non inseguire pacchi che non ci sono più.
-function nearestVisibleFreeParcel(beliefs) {
-    const me  = beliefs.me ?? { x: 0, y: 0 };
-    const obs = beliefs.config?.GAME?.player?.observation_distance ?? 5;
-    const free = [...(beliefs.parcels?.values() ?? [])]
-        .filter(p => !p.carriedBy)
-        .filter(p => (Math.abs(p.x - me.x) + Math.abs(p.y - me.y)) <= obs);
-    if (free.length === 0) return null;
-    free.sort((a, b) =>
-        (Math.abs(a.x - me.x) + Math.abs(a.y - me.y)) -
-        (Math.abs(b.x - me.x) + Math.abs(b.y - me.y)));
-    return free[0];
-}
-
 // Sceglie una spawn tile sensata: alta visibilità, e vicina a me.
 function bestSpawnTile(beliefs) {
     const spawnVis = beliefs.spawnVisibility ?? new Map();
@@ -258,87 +242,15 @@ function redirectAwayFromDeliver(beliefs) {
     return ['go_to_spawn'];   // fallback solo se proprio non c'è altro
 }
 
-// Log diagnostico dello stack (tag [STACK], NON filtrato). Deduplica i messaggi
-// consecutivi identici per non spammare a ogni tick.
-let _lastStackLog = '';
-function logStack(msg) {
-    if (msg === _lastStackLog) return;
-    _lastStackLog = msg;
-    console.log(`[STACK] ${msg}`);
-}
-
-// Delivery point più vicino a me (null se non ne conosco).
-function nearestDeliveryPoint(beliefs) {
-    const dps = beliefs.deliveryPoints ?? [];
-    if (dps.length === 0) return null;
-    const me = beliefs.me ?? { x: 0, y: 0 };
-    let best = null, bestD = Infinity;
-    for (const d of dps) {
-        const dist = Math.abs(d.x - me.x) + Math.abs(d.y - me.y);
-        if (dist < bestD) { best = d; bestD = dist; }
-    }
-    return best;
-}
-
-// Stack: quanto tempo provare a raggiungere N (cercando su spawn tile) prima di
-// arrendersi e consegnare quello che si ha. Evita lo stallo "non consegno mai".
-const STACK_GATHER_TIMEOUT_MS = Number(process.env.STACK_GATHER_TIMEOUT_MS) || 8000;
-let _stackStuckSince = null;
-
 function applyRulesToPredicate(predicate) {
     if (!predicate) return predicate;
     const [action, ...args] = predicate;
 
-    // ─── stack_size: consegna in stack di ESATTAMENTE N ──────────────────────
-    // Obiettivo: se POSSO fare N, faccio N. Quindi:
-    //   (1) appena ho ≥ N → CONSEGNO subito (non aspetto di accumularne altri);
-    //   (2) il BDI vuole consegnare ma ho < N → provo ad arrivare a N: prendo un
-    //       pacco visibile, oppure vado a CERCARNE su una spawn tile; solo se non
-    //       ci riesco entro STACK_GATHER_TIMEOUT_MS consegno quello che ho (così
-    //       non resto mai bloccato senza consegnare).
-    // N è limitato alla capacità.
-    if (Number.isInteger(activeRules.stackSize)) {
-        const cap = beliefs.config?.GAME?.player?.capacity;
-        const N = Number.isInteger(cap) ? Math.min(activeRules.stackSize, cap) : activeRules.stackSize;
-        const carried = beliefs.carriedParcels?.length ?? 0;
-
-        // (1) Ho già N → consegna SUBITO invece di continuare a raccogliere.
-        if (carried >= N && (action === 'go_pick_up' || action === 'go_to_spawn')) {
-            const d = nearestDeliveryPoint(beliefs);
-            if (d) {
-                _stackStuckSince = null;
-                logStack(`porto ${carried}≥${N} → CONSEGNO subito (niente accumulo)`);
-                return applyRulesToPredicate(['deliver', d.x, d.y]);   // rispetta zero/bonus delivery
-            }
-        }
-
-        // (2) Il BDI vuole consegnare ma porto < N → prova ad arrivare a N.
-        if (action === 'deliver' && carried < N) {
-            const p = nearestVisibleFreeParcel(beliefs);
-            if (p) {
-                _stackStuckSince = null;
-                logStack(`porto ${carried}/${N} → prendo un altro pacco @(${Math.round(p.x)},${Math.round(p.y)})`);
-                return ['go_pick_up', Math.round(p.x), Math.round(p.y), p.id, p.reward];
-            }
-            // niente in vista: vai a CERCARNE su una spawn tile, finché non scade
-            // il tempo massimo; poi consegna comunque (no stallo).
-            if (_stackStuckSince == null) _stackStuckSince = Date.now();
-            const s = bestSpawnTile(beliefs);
-            if (s && (Date.now() - _stackStuckSince) < STACK_GATHER_TIMEOUT_MS) {
-                logStack(`porto ${carried}/${N}, cerco il ${N}° pacco → spawn (${s.x},${s.y})`);
-                return ['go_to_spawn', s.x, s.y];
-            }
-            _stackStuckSince = null;
-            logStack(`porto ${carried}/${N}, non riesco ad arrivare a ${N} → CONSEGNO comunque`);
-            return predicate;
-        }
-
-        // (3) Consegna con stack pieno (la quantità esatta la gestiscono moves/plans).
-        if (action === 'deliver') {
-            _stackStuckSince = null;
-            logStack(`porto ${carried}/${N} → stack pieno, CONSEGNO`);
-        }
-    }
+    // NB: stack_size NON è più gestito qui. La logica "consegna in stack di N"
+    // vive in options.js (shouldDeliver): finché porti < N l'agente resta in
+    // modalità RACCOLTA e usa la pattuglia normale del BDI (con rotazione delle
+    // zone spawn esauste). La quantità esatta consegnata la gestiscono moves.js
+    // (consegna automatica) e plans.js (piano Deliver).
 
     // zero_delivery: la tile target è vietata → ne scelgo un'altra (la più
     // vicina che non sia nella lista).
