@@ -21,6 +21,7 @@
 import OpenAI from 'openai';
 import { initQueue, enqueue } from './mission_queue.js';
 import { parseIntervalMs } from './basic_functions.js';
+import { extractReward } from './mission_evaluator.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM — LiteLLM UniTN (come lab8)
@@ -1343,6 +1344,18 @@ async function runMission(missionText, ctx, signal = null) {
             // Riconosciuta ma non eseguita: il freeze è fuori dallo scope del nucleo.
             console.log('[LLM] Missione REATTIVA riconosciuta ma non eseguita (freeze non implementato nel nucleo).');
             return `Riconosciuta (reactive, non eseguita): ${intent.reason || ''}`;
+        }
+        // SAFETY NET deterministico: un'azione ATOMICA con reward NEGATIVO è una
+        // trappola auto-lesiva (penalità per AVERLA fatta) → non eseguirla, anche
+        // se l'LLM l'ha classificata "atomic". Le penalità-OBBLIGO sono regole
+        // (family 'rule') o reattive, gestite sopra: questo colpisce solo le
+        // azioni una-tantum che fanno solo perdere punti.
+        if (intent.family === 'atomic') {
+            const r = extractReward(missionText);
+            if (r != null && r < 0) {
+                console.log(`[LLM] Missione IGNORATA (trappola: azione atomica con reward ${r}).`);
+                return `Ignorata: trappola auto-lesiva (reward ${r})`;
+            }
         }
     }
 
