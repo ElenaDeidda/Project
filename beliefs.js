@@ -9,6 +9,7 @@ const SENSOR_RELIABILITY = 0.9;               // P(vedo il pacco | è nel raggio
 const ENEMY_NEAR_DIST    = 5;                 // un nemico entro questa distanza dal pacco…
 const ENEMY_DECAY_MULT   = 4;                 // …fa decadere P(esiste) 4× più in fretta
 const CONF_EPS           = 0.05;              // sotto questa confidenza il pacco è "perso"
+const CONF_DEBUG         = true;              // ⇦ metti false per zittire i log [CONF]
 
 export const beliefs = {
     me:             { id: '', name: '', teamId: '', teamName: '', x: 0, y: 0, score: 0 },
@@ -168,6 +169,9 @@ export function updateSensing(sensing) {
             continue;
         }
         seen.add(p.id);
+        const prev = beliefs.parcels.get(p.id);
+        if (CONF_DEBUG && prev && (prev.confidence ?? 1) < 1)
+            console.log(`[CONF] ${p.id} @(${p.x},${p.y}) RIVISTO → confidence ripristinata 1.00 (era ${(prev.confidence).toFixed(2)})`);
         beliefs.parcels.set(p.id, {
             id: p.id, x: p.x, y: p.y,
             reward: p.reward, carriedBy: p.carriedBy ?? null,
@@ -199,22 +203,37 @@ export function updateSensing(sensing) {
 
         // 1) Decadimento temporale di P(esiste). Più veloce se un nemico è vicino
         //    al pacco (può averlo già raccolto). "Visto tanto tempo fa → P bassa".
+        const cStart = p.confidence ?? 1;
         const dt = now - (p.lastConfUpdate ?? now);
         p.lastConfUpdate = now;
-        let lambda = CONF_LAMBDA;
-        for (const a of beliefs.agents.values())
-            if (smartDist(a, p) <= ENEMY_NEAR_DIST) { lambda *= ENEMY_DECAY_MULT; break; }
-        let c = (p.confidence ?? 1) * Math.exp(-lambda * dt);
+        let lambda = CONF_LAMBDA, enemyDist = null;
+        for (const a of beliefs.agents.values()) {
+            const d = smartDist(a, p);
+            if (d <= ENEMY_NEAR_DIST) { lambda *= ENEMY_DECAY_MULT; enemyDist = d; break; }
+        }
+        let c = cStart * Math.exp(-lambda * dt);
+        const cAfterTime = c;
 
         // 2) Dentro il raggio di osservazione ma NON lo vedo → forte evidenza che
         //    non c'è più: revisione bayesiana  P(E|¬Seen)=P(¬Seen|E)·P(E)/P(¬Seen),
         //    con P(¬Seen|E)=1−affidabilità sensore e P(¬Seen|¬E)=1.
-        if (smartDist(beliefs.me, p) < obsDist) {
+        const myDist = smartDist(beliefs.me, p);
+        const inRange = myDist < obsDist;
+        if (inRange) {
             const pNsE = 1 - SENSOR_RELIABILITY;
             c = (pNsE * c) / (pNsE * c + (1 - c));
         }
 
         p.confidence = c;
+
+        if (CONF_DEBUG) {
+            const why = [];
+            why.push(`temporale ${cStart.toFixed(2)}→${cAfterTime.toFixed(2)} (Δt=${dt}ms)`);
+            if (enemyDist !== null) why.push(`nemico a ${enemyDist} → decay ×${ENEMY_DECAY_MULT}`);
+            if (inRange)           why.push(`IN-RANGE non visto (dist ${myDist}≤${obsDist}) → bayes ${cAfterTime.toFixed(2)}→${c.toFixed(2)}`);
+            console.log(`[CONF] ${id} @(${p.x},${p.y}) fuori-vista: ${why.join(' | ')}  ⇒ confidence=${c.toFixed(2)}${c < CONF_EPS ? ' ✗ PERSO (rimosso)' : ''}`);
+        }
+
         if (c < CONF_EPS) beliefs.parcels.delete(id);   // confidenza troppo bassa → "perso"
     }
 
