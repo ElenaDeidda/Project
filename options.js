@@ -306,7 +306,10 @@ function buildPickupOptions(agentPositions, dist) {
 
         // Modello "with uncertainty": se P(esiste ancora) è sotto soglia NON
         // generiamo l'opzione di raccolta (slide: "does not generate the option").
-        if ((parcel.confidence ?? 1) < PICKUP_CONFIDENCE_MIN) continue;
+        if ((parcel.confidence ?? 1) < PICKUP_CONFIDENCE_MIN) {
+            console.log(`[CONF] ${id} SCARTATO da go_pick_up: confidence ${(parcel.confidence).toFixed(2)} < soglia ${PICKUP_CONFIDENCE_MIN} (poco credibile)`);
+            continue;
+        }
 
         // Tile occupata da un agente avversario: non riusciremmo a raccoglierlo
         const key = `${Math.round(parcel.x)}_${Math.round(parcel.y)}`;
