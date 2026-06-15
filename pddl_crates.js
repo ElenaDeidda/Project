@@ -194,6 +194,7 @@ async function callSolver(beliefs, targetX, targetY) {
 }
 
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. PIANO → SEQUENZA MOSSE (come PddlExecutor di lab5, ma per il nostro dominio)
 //
