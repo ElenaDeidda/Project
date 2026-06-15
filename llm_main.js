@@ -40,6 +40,7 @@ const { beliefs, updateConfig, updateMap, updateSensing, formatMap } = await imp
 // non sta eseguendo una special mission.
 const { generateOptions, deliberate } = await import("./options.js");
 const { IntentionRevision } = await import("./intentions.js");
+const { initCoordination, relayInterceptDeliver } = await import("./coordination.js");
 
 // 1. Connessione al gioco
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
@@ -318,7 +319,9 @@ socket.onSensing(async (s) => {
     applyRulesToBeliefs();
     await applyRulesAsActions(socket, beliefs);   // scarica pacchi non conformi
     if (bdiPaused) return;
-    const predicate = applyRulesToPredicate(deliberate(generateOptions()));
+    if (beliefs.coord?.frozen)   { agent.stop(); return; }            // red light
+    if (beliefs.coord?.override) { agent.push(beliefs.coord.override); return; } // rendezvous/staffetta
+    const predicate = relayInterceptDeliver(applyRulesToPredicate(deliberate(generateOptions())));
     logPredicateIfChanged(predicate);
     agent.push(predicate);
 });
@@ -330,6 +333,9 @@ await Promise.all([
 ]);
 
 console.log(`[LLM] Pronto. me=(${beliefs.me.x},${beliefs.me.y}) team=${beliefs.me.teamName} | mapTiles=${beliefs.mapTiles.size}`);
+
+// Coordinamento di team (livello 3): accende communication.js e i beliefs.coord.
+initCoordination(socket);
 
 // Stampa UNA VOLTA la mappa con le coordinate, così è chiaro come sono i numeri.
 console.log(formatMap(beliefs));
@@ -359,9 +365,15 @@ while (true) {
     if (!bdiPaused) {
         applyRulesToBeliefs();
         await applyRulesAsActions(socket, beliefs);
-        const predicate = applyRulesToPredicate(deliberate(generateOptions()));
-        logPredicateIfChanged(predicate);
-        agent.push(predicate);
+        if (beliefs.coord?.frozen) {
+            agent.stop();                                            // red light
+        } else if (beliefs.coord?.override) {
+            agent.push(beliefs.coord.override);                      // rendezvous/staffetta
+        } else {
+            const predicate = relayInterceptDeliver(applyRulesToPredicate(deliberate(generateOptions())));
+            logPredicateIfChanged(predicate);
+            agent.push(predicate);
+        }
     }
     await new Promise(r => setTimeout(r, 200));
 }
