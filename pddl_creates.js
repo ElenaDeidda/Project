@@ -1,11 +1,11 @@
 // pddl_creates.js
 // Planner PDDL per mappe con casse (tile tipo '5!').
-// Le stringhe domain e problem sono generate manualmente: la libreria
-// PddlDomain/PddlAction genera predicati duplicati e sovrascrive il nome
-// del dominio con 'default', producendo PDDL malformato.
-// Qui usiamo solo onlineSolver dalla libreria.
+// Il dominio viene generato come stringa (PddlDomain/PddlAction duplica i predicati
+// per le azioni push, producendo PDDL malformato).
+// Il problema usa Beliefset + PddlProblem dalla libreria, con fix critico:
+// PddlProblem.toPddlString() aggiunge già (:goal (...)) → il goal si passa SENZA parens.
 
-import { onlineSolver } from '@unitn-asa/pddl-client';
+import { onlineSolver, PddlProblem, Beliefset } from '@unitn-asa/pddl-client';
 
 const PDDL_TIMEOUT_MS = 5000;
 
@@ -31,11 +31,12 @@ function directionBetween(from, to) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. DOMAIN — stringa PDDL fissa
+// 2. DOMAIN — stringa PDDL fissa (PddlDomain/PddlAction non usati: duplicano
+//    predicati come 'right' che compaiono due volte nella stessa precondizione)
 // ─────────────────────────────────────────────────────────────────────────────
 
 function domainPddl() {
-    return `(define (domain crate-world)
+    return `(define (domain default)
   (:requirements :strips)
   (:predicates
     (me ?a)
@@ -77,26 +78,21 @@ function domainPddl() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. PROBLEM — stringa PDDL generata dallo stato attuale
+// 3. PROBLEM — costruito con Beliefset + PddlProblem dalla libreria
 // ─────────────────────────────────────────────────────────────────────────────
 
-function problemPddl(beliefs, targetX, targetY) {
+function buildCrateProblem(beliefs, targetX, targetY) {
     const agentKey = `${Math.round(beliefs.me.x)}_${Math.round(beliefs.me.y)}`;
-    const objects  = new Set(['agent1']);
-    const facts    = [];
+    const bs = new Beliefset();
 
     // Agente
-    const agentTile = tileId(beliefs.me.x, beliefs.me.y);
-    objects.add(agentTile);
-    facts.push(`(me agent1)`);
-    facts.push(`(at agent1 ${agentTile})`);
+    bs.declare(`me agent1`);
+    bs.declare(`at agent1 ${tileId(beliefs.me.x, beliefs.me.y)}`);
 
     // Casse: escludi la posizione dell'agente (stato iniziale contraddittorio)
     for (const [key, pos] of beliefs.crateTiles.entries()) {
         if (key === agentKey) continue;
-        const tid = tileId(pos.x, pos.y);
-        objects.add(tid);
-        facts.push(`(crate-at ${tid})`);
+        bs.declare(`crate-at ${tileId(pos.x, pos.y)}`);
     }
 
     // Adiacenze: connected (per MOVE) + direzionali right/left/up/down (per PUSH)
@@ -104,7 +100,6 @@ function problemPddl(beliefs, targetX, targetY) {
         if (tile.type === '0') continue;
         const [x, y] = key.split('_').map(Number);
         const from = tileId(x, y);
-        objects.add(from);
 
         const adj = [
             { nx: x + 1, ny: y,     dir: 'right' },
@@ -117,9 +112,8 @@ function problemPddl(beliefs, targetX, targetY) {
             const nTile = beliefs.mapTiles.get(`${nx}_${ny}`);
             if (!nTile || nTile.type === '0') continue;
             const to = tileId(nx, ny);
-            objects.add(to);
-            facts.push(`(connected ${from} ${to})`);
-            facts.push(`(${dir} ${from} ${to})`);
+            bs.declare(`connected ${from} ${to}`);
+            bs.declare(`${dir} ${from} ${to}`);
         }
     }
 
@@ -127,22 +121,17 @@ function problemPddl(beliefs, targetX, targetY) {
     for (const [key, tile] of beliefs.mapTiles.entries()) {
         if (tile.type !== '5' && tile.type !== '5!') continue;
         const [x, y] = key.split('_').map(Number);
-        const tid = tileId(x, y);
-        objects.add(tid);
-        facts.push(`(crate-slot ${tid})`);
+        bs.declare(`crate-slot ${tileId(x, y)}`);
     }
 
-    const targetTile = tileId(targetX, targetY);
-    objects.add(targetTile);
-
-    return `(define (problem crate-problem)
-  (:domain crate-world)
-  (:objects ${[...objects].join(' ')})
-  (:init
-    ${facts.join('\n    ')}
-  )
-  (:goal (at agent1 ${targetTile}))
-)`;
+    // NOTA: PddlProblem.toPddlString() genera (:goal (${goals})) — aggiunge già le
+    // parentesi esterne. Il goal va passato SENZA parentesi esterne per evitare ((goal)).
+    return new PddlProblem(
+        'crate-problem',
+        bs.objects.join(' '),
+        bs.toPddlString(),
+        `at agent1 ${tileId(targetX, targetY)}`
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,12 +139,12 @@ function problemPddl(beliefs, targetX, targetY) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function solveCratePath(beliefs, targetX, targetY) {
-    const domainStr  = domainPddl();
-    const problemStr = problemPddl(beliefs, targetX, targetY);
+    const domainStr = domainPddl();
+    const problem   = buildCrateProblem(beliefs, targetX, targetY);
 
     try {
         const rawPlan = await Promise.race([
-            onlineSolver(domainStr, problemStr),
+            onlineSolver(domainStr, problem.toPddlString()),
             new Promise((_, reject) =>
                 setTimeout(() => reject(new Error(`timeout ${PDDL_TIMEOUT_MS}ms`)), PDDL_TIMEOUT_MS)
             ),
