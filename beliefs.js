@@ -293,24 +293,41 @@ export function updateCrates(sensing) {
     }
 
     // --- Strategia B: sensing.crates non disponibile → usa sensing.positions ---
-    // Le positions sono le tile percorribili visibili. Se una tile '5!' è
-    // nel raggio visivo e il server la manda come positions (percorribile),
-    // significa che la cassa non c'è più lì.
+    // Le positions sono le tile percorribili visibili nel raggio di osservazione.
     if (!sensing.positions || sensing.positions.length === 0) return;
 
     const walkableVisible = new Set(
         sensing.positions.map(p => `${Math.round(p.x)}_${Math.round(p.y)}`)
     );
 
-    for (const [key] of beliefs.crateTiles.entries()) {
+    // B1: rimuovi casse in '5!' che ora sono walkable (cassa spostata via)
+    // Usa snapshot per evitare problemi di modifica durante iterazione.
+    for (const [key] of [...beliefs.crateTiles.entries()]) {
         const [x, y] = key.split('_').map(Number);
-        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue; // fuori vista
-
-        // Se il server dice che quella tile è percorribile (walkable), la cassa non c'è più
+        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue;
         if (walkableVisible.has(key)) {
             beliefs.crateTiles.delete(key);
             beliefs.mapTiles.set(key, { type: '5' });
             console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — tile ora walkable (fallback positions)`);
+        }
+    }
+
+    // B2: aggiungi casse in slot '5' non walkable e non occupati da agenti.
+    // Un '5' nel raggio visivo che il server non riporta come walkable e non
+    // è occupato da un agente noto deve avere una cassa (es. dopo restart).
+    const agentKeys = new Set(
+        [...beliefs.agents.values()].map(a => `${Math.round(a.x)}_${Math.round(a.y)}`)
+    );
+    agentKeys.add(`${mx}_${my}`); // l'agente stesso non è in beliefs.agents
+
+    for (const [key, tile] of beliefs.mapTiles.entries()) {
+        if (tile.type !== '5') continue;
+        const [x, y] = key.split('_').map(Number);
+        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue;
+        if (!walkableVisible.has(key) && !agentKeys.has(key)) {
+            beliefs.crateTiles.set(key, { x, y });
+            beliefs.mapTiles.set(key, { type: '5!' });
+            console.log(`[BELIEFS] cassa rilevata a (${x},${y}) — slot non walkable (inferenza positions)`);
         }
     }
 }
