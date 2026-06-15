@@ -48,7 +48,7 @@ function directionBetween(from, to) {
 
 function buildDomain() {
     return `(define (domain crate-world)
-  (:requirements :strips)
+  (:requirements :strips :negative-preconditions)
   (:predicates
     (me ?a)
     (at ?a ?b)
