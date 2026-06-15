@@ -22,9 +22,25 @@ const _handlers    = new Map();       // type -> [callback]
 const _teammates   = new Set();       // id degli alleati confermati
 const _pendingAsks = new Map();       // askId -> resolve()
 
+// Allowlist di NOMI di compagni (env TEAM_NAMES="elena,lara"), letta a runtime in
+// initComms. Serve quando i due agenti hanno teamId DIVERSI (token di team diversi):
+// in quel caso il compagno viene riconosciuto per NOME invece che per teamId.
+let _allowedNames = new Set();
+
 // teamId corrente — letto dinamicamente per evitare snapshot stantii nei messaggi
 function teamId() {
     return _beliefs?.me?.teamId || '';
+}
+
+// È un messaggio di un mio compagno? Accetta se coincide il teamId OPPURE se il
+// nome del mittente è nell'allowlist TEAM_NAMES (e non sono io stesso).
+function isFromTeammate(senderName, msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    const myTeam = teamId();
+    if (myTeam && msg.teamId === myTeam) return true;            // stessa squadra
+    const sn = String(senderName || '').toLowerCase();
+    const my = String(_beliefs?.me?.name || '').toLowerCase();
+    return _allowedNames.size > 0 && sn !== my && _allowedNames.has(sn); // stesso nome-team
 }
 
 
@@ -35,6 +51,9 @@ function teamId() {
 export function initComms(socket, beliefs) {
     _socket  = socket;
     _beliefs = beliefs;
+    _allowedNames = new Set(
+        (process.env.TEAM_NAMES || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    );
 
     if (!teamId()) {
         console.warn('[COMMS] beliefs.me.teamId vuoto — initComms va chiamato dopo onYou');
@@ -42,22 +61,21 @@ export function initComms(socket, beliefs) {
 
     // Tutti i messaggi del team passano da qui
     socket.onMsg((id, name, msg, reply) => {
-        const myTeam = teamId();
+        const mine = isFromTeammate(name, msg);
 
         // DEBUG: traccia i messaggi di coordinamento (oggetti con .type), così si
-        // vede SE e COSA arriva — anche quelli scartati (team diverso).
+        // vede SE e COSA arriva — anche quelli scartati.
         if (msg && typeof msg === 'object' && msg.type) {
-            if (!myTeam) {
-                dbg(`✗ ricevuto '${msg.type}' da ${name}(${id}) ma il MIO teamId è vuoto → scartato`);
-            } else if (msg.teamId !== myTeam) {
-                dbg(`✗ ricevuto '${msg.type}' da ${name}(${id}) team=${msg.teamId} ≠ mio(${myTeam}) → scartato`);
+            if (mine) {
+                const how = (teamId() && msg.teamId === teamId()) ? 'team' : 'nome';
+                dbg(`✓ ricevuto '${msg.type}' da ${name}(${id}) [match: ${how}]`);
             } else {
-                dbg(`✓ ricevuto '${msg.type}' da ${name}(${id})`);
+                dbg(`✗ ricevuto '${msg.type}' da ${name}(${id}) team=${msg.teamId} (mio=${teamId() || '∅'}) e nome non in TEAM_NAMES → scartato`);
             }
         }
 
-        // Scarta messaggi senza teamId o di team diversi
-        if (!msg || !myTeam || msg.teamId !== myTeam) return;
+        // Scarta i messaggi che non sono di un compagno
+        if (!mine) return;
 
         // Registra l'alleato (log solo alla PRIMA scoperta)
         if (id && !_teammates.has(id)) {
@@ -76,7 +94,7 @@ export function initComms(socket, beliefs) {
         if (msg.type === '__ask__' && typeof reply === 'function') {
             const handler = _handlers.get(msg.innerType)?.[0];
             const answer  = handler ? handler(msg.payload, id) : null;
-            reply({ teamId: myTeam, type: '__reply__', askId: msg.askId, payload: answer });
+            reply({ teamId: teamId(), type: '__reply__', askId: msg.askId, payload: answer });
             return;
         }
 
@@ -87,7 +105,8 @@ export function initComms(socket, beliefs) {
 
     // Handshake iniziale: annuncio la mia presenza al team
     socket.emitShout({ teamId: teamId(), type: 'hello', payload: { role: MY_ROLE } });
-    dbg(`inizializzato — team=${teamId() || '??'} role=${MY_ROLE} → inviato 'hello'`);
+    const names = _allowedNames.size ? [..._allowedNames].join(',') : '(nessuno → solo teamId)';
+    dbg(`inizializzato — team=${teamId() || '??'} role=${MY_ROLE} | TEAM_NAMES=${names} → inviato 'hello'`);
 }
 
 
