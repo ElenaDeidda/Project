@@ -1,5 +1,5 @@
 import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
-import { beliefs, updateConfig, updateMap, updateSensing } from './beliefs.js';
+import { beliefs, updateConfig, updateMap, updateSensing, updateCrates } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
 import dotenv from 'dotenv';
@@ -123,6 +123,7 @@ const { width, height } = await mapReady;
 // Registra sensing DOPO che beliefs.me.id è garantito impostato da onYou
 socket.onSensing( (s) => {
     updateSensing(s);
+    updateCrates(s);    // riconcilia posizione casse col server
     agent.push( deliberate( generateOptions() ) );
 });
 
