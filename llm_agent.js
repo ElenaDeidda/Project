@@ -1040,7 +1040,7 @@ async function understandMission(missionText, beliefs, tools) {
     const intent = parseIntentJson(out);
     if (!intent || typeof intent.family !== 'string') return null;
     const fam = intent.family.toLowerCase();
-    if (!['question', 'atomic', 'rule', 'reactive', 'ignore'].includes(fam)) return null;
+    if (!['question', 'atomic', 'rule', 'reactive', 'coordinate', 'ignore'].includes(fam)) return null;
     intent.family = fam;
     return intent;
 }
