@@ -7,7 +7,7 @@ import {
     markArrived, isRendezvousDone, endRendezvous,
     nearestReachableWithinDist, nearestRowTile, freeNeighborOf,
     isPostmanReady, notifyPostmanReady, notifyDropped, wasDropped,
-    clearOverride,
+    notifyRelayDone, clearOverride,
 } from './coordination.js';
 
 // Attende che `cond()` sia vera; ritorna false al timeout, lancia ['stopped'] se
@@ -247,7 +247,7 @@ export class GoNearAndWait extends PlanBase {
         const target = nearestReachableWithinDist({ x, y }, maxDist);
         if (!target) throw [`Nessuna tile raggiungibile entro ${maxDist} da (${x},${y})`];
 
-        console.log(`[PLANS] GoNearAndWait → (${target.x},${target.y}) (≤${maxDist} da (${x},${y}))`);
+        console.log(`[COORD] GoNearAndWait → (${target.x},${target.y}) (≤${maxDist} da (${x},${y}))`);
         const nav = await navigateTo(beliefs.me, target, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${target.x},${target.y})`];
@@ -255,7 +255,7 @@ export class GoNearAndWait extends PlanBase {
         markArrived();
         const ok = await waitUntil(() => isRendezvousDone(), this.shouldStop, 60000);
         if (this.stopped) throw ['stopped'];
-        console.log(`[PLANS] GoNearAndWait: ${ok ? 'tutti arrivati ✓' : 'timeout attesa alleato'}`);
+        console.log(`[COORD] GoNearAndWait: ${ok ? 'tutti arrivati ✓' : 'timeout attesa alleato'}`);
         endRendezvous();
         return true;
     }
@@ -272,14 +272,14 @@ export class GoToRowAndWait extends PlanBase {
         const target = nearestRowTile(parity);
         if (!target) throw [`Nessuna riga ${parity} raggiungibile`];
 
-        console.log(`[PLANS] GoToRowAndWait → (${target.x},${target.y}) riga ${parity}`);
+        console.log(`[COORD] GoToRowAndWait → (${target.x},${target.y}) riga ${parity}`);
         const nav = await navigateTo(beliefs.me, target, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${target.x},${target.y})`];
 
         beliefs.coord.frozen = true;   // il loop resta fermo finché non arriva "green"
         clearOverride();
-        console.log(`[PLANS] GoToRowAndWait: su riga ${parity}, FERMO in attesa di "green"`);
+        console.log(`[COORD] GoToRowAndWait: su riga ${parity}, FERMO in attesa di "green"`);
         return true;
     }
 }
@@ -292,14 +292,14 @@ export class RelayDrop extends PlanBase {
 
     async execute(_action, x, y, ids) {
         if (this.stopped) throw ['stopped'];
-        console.log(`[PLANS] RelayDrop → handover (${x},${y})`);
+        console.log(`[COORD] RelayDrop → handover (${x},${y})`);
         const nav = await navigateTo(beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso handover (${x},${y})`];
 
         const ready = await waitUntil(() => isPostmanReady(), this.shouldStop, 60000);
         if (this.stopped) throw ['stopped'];
-        if (!ready) console.warn('[PLANS] RelayDrop: timeout attesa postino — lascio comunque');
+        if (!ready) console.warn('[COORD] RelayDrop: timeout attesa postino — lascio comunque');
 
         const dropIds = (Array.isArray(ids) && ids.length) ? ids : deliverableIds(beliefs);
         const dropped = await this.#socket.emitPutdown(dropIds);
@@ -308,7 +308,7 @@ export class RelayDrop extends PlanBase {
         beliefs.carrying = beliefs.carriedParcels.length > 0;
         notifyDropped();
         clearOverride();
-        console.log(`[PLANS] RelayDrop: lasciati ${dropped?.length ?? dropIds.length} pacchi → torno a raccogliere`);
+        console.log(`[COORD] RelayDrop: lasciati ${dropped?.length ?? dropIds.length} pacchi → torno a raccogliere`);
         return true;
     }
 }
@@ -325,7 +325,7 @@ export class RelayFetch extends PlanBase {
         // Mi avvicino a una tile ADIACENTE libera: la tile di handover è (sarà)
         // occupata dal raccoglitore, quindi non posso starci sopra finché non molla.
         const spot = freeNeighborOf(H);
-        console.log(`[PLANS] RelayFetch → mi avvicino a handover (${x},${y}) via (${spot.x},${spot.y})`);
+        console.log(`[COORD] RelayFetch → mi avvicino a handover (${x},${y}) via (${spot.x},${spot.y})`);
         const nav = await navigateTo(beliefs.me, spot, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso handover (${x},${y})`];
@@ -333,7 +333,7 @@ export class RelayFetch extends PlanBase {
         notifyPostmanReady();
         const ok = await waitUntil(() => wasDropped(), this.shouldStop, 60000);
         if (this.stopped) throw ['stopped'];
-        if (!ok) console.warn('[PLANS] RelayFetch: timeout attesa drop del raccoglitore');
+        if (!ok) console.warn('[COORD] RelayFetch: timeout attesa drop del raccoglitore');
 
         // Il raccoglitore ha lasciato i pacchi e si sta spostando: entro sulla
         // tile di handover (riprovo finché la libera) e raccolgo.
@@ -348,7 +348,7 @@ export class RelayFetch extends PlanBase {
             beliefs.carrying = true;
             beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
         }
-        console.log(`[PLANS] RelayFetch: raccolti ${picked?.length ?? 0} pacchi → consegno`);
+        console.log(`[COORD] RelayFetch: raccolti ${picked?.length ?? 0} pacchi → consegno`);
 
         const target = nearestDeliveryPoint();
         if (target) {
@@ -365,7 +365,8 @@ export class RelayFetch extends PlanBase {
         beliefs.coord._handover = null;
         beliefs.coord._dropped  = false;
         clearOverride();
-        console.log(`[PLANS] RelayFetch: consegnato. Score: ${beliefs.me.score}`);
+        notifyRelayDone();   // sblocco il raccoglitore: può cedere il prossimo carico
+        console.log(`[COORD] RelayFetch: CONSEGNATO ✓ Score: ${beliefs.me.score}`);
         return true;
     }
 }

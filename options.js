@@ -309,9 +309,16 @@ function buildPickupOptions(agentPositions, dist) {
     const options = [];
     const blocked = getBlockedCells();
 
+    const coord = beliefs.coord;
     for (const [id, parcel] of beliefs.parcels.entries()) {
         // Già portato da qualcuno
         if (parcel.carriedBy) continue;
+
+        // Staffetta: NON ri-raccogliere i pacchi appena ceduti al postino (sono
+        // sulla tile di handover, in attesa che li prenda lui) → eviterebbe il loop.
+        if (coord?.role === 'collector' && coord?._relayBusy && coord?._dropTile
+            && Math.round(parcel.x) === coord._dropTile.x
+            && Math.round(parcel.y) === coord._dropTile.y) continue;
 
         // Modello "with uncertainty": se P(esiste ancora) è sotto soglia NON
         // generiamo l'opzione di raccolta (slide: "does not generate the option").
