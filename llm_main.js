@@ -47,7 +47,22 @@ const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
 // 2. Listener: config (per observation_distance ecc.), map (per pathfinding),
 //    you (identità + posizione), sensing (pacchi, nemici).
 socket.onConfig(c => updateConfig(c));
-socket.onMap((w, h, t) => updateMap(w, h, t));
+
+// onMap arriva alla connessione e di nuovo a ogni RESTART della partita. Al
+// restart le regole installate dall'LLM (stack_size, max_deliver_reward, ...)
+// devono essere AZZERATE: valgono per la partita in corso, non per le successive.
+// Salta il primo map (nessuna regola ancora) e resetta dai successivi.
+let _mapLoaded = false;
+socket.onMap((w, h, t) => {
+    updateMap(w, h, t);
+    if (_mapLoaded) {
+        const had = Object.keys(activeRules);
+        for (const k of had) delete activeRules[k];
+        if (beliefs.forbiddenTiles instanceof Map) beliefs.forbiddenTiles.clear();
+        if (had.length) console.log(`[LLM-MAIN] 🔄 Restart partita → regole azzerate (erano: ${had.join(', ')})`);
+    }
+    _mapLoaded = true;
+});
 socket.onYou(me => {
     beliefs.me.id       = me.id;
     beliefs.me.name     = me.name;

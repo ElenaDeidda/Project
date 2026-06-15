@@ -160,6 +160,14 @@ async function opportunisticActions(me, socket) {
     const x = Math.round(me.x), y = Math.round(me.y);
 
     // Pickup: c'è un pacco libero proprio qui sotto?
+        // Cap stack_size=N: se porto già N pacchi NON ne raccolgo un (N+1)-esimo
+    // mentre vado a consegnare — altrimenti consegno i N più ricchi e me ne
+    // "resta 1" in mano. (Con max_deliver_reward invece accumulo fino a capacity.)
+    const Ncap = beliefs.activeRules?.stackSize;
+    const stackCapReached = Number.isInteger(Ncap)
+        && typeof beliefs.activeRules?.maxDeliverReward !== 'number'
+        && beliefs.carriedParcels.length >= Ncap;
+    if (!stackCapReached)
     for (const p of beliefs.parcels.values()) {
         if (p.carriedBy) continue;
         if (Math.round(p.x) !== x || Math.round(p.y) !== y) continue;
