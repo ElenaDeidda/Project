@@ -43,7 +43,7 @@ export class GoPickUpCrate extends PlanBase {
                 const toKey   = `${step.crateTo.x}_${step.crateTo.y}`;
                 beliefs.crateTiles.delete(fromKey);
                 beliefs.crateTiles.set(toKey, step.crateTo);
-                beliefs.mapTiles.set(fromKey, { type: '3' });
+                beliefs.mapTiles.set(fromKey, { type: '5' });
                 beliefs.mapTiles.set(toKey,   { type: '5!' });
             }
         }
@@ -88,7 +88,7 @@ export class DeliverCrate extends PlanBase {
                 const toKey   = `${step.crateTo.x}_${step.crateTo.y}`;
                 beliefs.crateTiles.delete(fromKey);
                 beliefs.crateTiles.set(toKey, step.crateTo);
-                beliefs.mapTiles.set(fromKey, { type: '3' });
+                beliefs.mapTiles.set(fromKey, { type: '5' });
                 beliefs.mapTiles.set(toKey,   { type: '5!' });
             }
         }
