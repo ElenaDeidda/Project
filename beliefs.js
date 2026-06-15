@@ -1,6 +1,15 @@
 // beliefs.js — Stato del mondo e funzioni di aggiornamento
 import { smartDist, parseIntervalMs } from './basic_functions.js';
 
+// ─── Modello di credenze "with uncertainty" (slide del prof) ──────────────────
+// Ogni pacco fuori vista porta una confidenza P(esiste ancora) che DECADE nel
+// tempo e viene rivista in stile bayesiano. Costanti tarabili:
+const CONF_LAMBDA        = Math.LN2 / 10000;  // half-life 10s di P(esiste) fuori vista
+const SENSOR_RELIABILITY = 0.9;               // P(vedo il pacco | è nel raggio ed esiste)
+const ENEMY_NEAR_DIST    = 5;                 // un nemico entro questa distanza dal pacco…
+const ENEMY_DECAY_MULT   = 4;                 // …fa decadere P(esiste) 4× più in fretta
+const CONF_EPS           = 0.05;              // sotto questa confidenza il pacco è "perso"
+
 export const beliefs = {
     me:             { id: '', name: '', teamId: '', teamName: '', x: 0, y: 0, score: 0 },
     config:         {},
@@ -163,28 +172,50 @@ export function updateSensing(sensing) {
             id: p.id, x: p.x, y: p.y,
             reward: p.reward, carriedBy: p.carriedBy ?? null,
             lastDecay: now,            // ultimo istante in cui ho scontato il decay
+            confidence: 1,             // visto ORA → P(esiste)=1 (modello "with uncertainty")
+            lastSeen: now,
+            lastConfUpdate: now,
         });
     }
+
+    // Aggiorna gli agenti PRIMA della riconciliazione pacchi, così la confidenza
+    // può tener conto dei nemici vicini (last-known position).
+    updateAgents(sensing.agents ?? []);
 
     // --- 2. Riconcilia i pacchi NON visti in questo tick (memoria) ---
     // Senza questo passo un pacco che esce dalla vista sparirebbe subito,
     // facendo perdere il commitment all'agente → oscillazione tra due target.
+    // Modello "with uncertainty": invece di cancellare di colpo, manteniamo una
+    // confidenza P(esiste) che decade nel tempo e viene rivista in stile bayesiano.
     for (const [id, p] of beliefs.parcels) {
         if (seen.has(id)) continue;
 
-        // Se è dentro il raggio di osservazione ma non lo vediamo → preso/scaduto
-        if (smartDist(beliefs.me, p) < obsDist) {
-            beliefs.parcels.delete(id);
-            continue;
-        }
-
-        // Fuori vista: scontiamo il reward per il decay maturato dall'ultimo conteggio
+        // Reward ATTESO: continua a scontare il decay di gioco (= valore SE esiste).
         if (Number.isFinite(decayMs)) {
-            p.reward  -= (now - p.lastDecay) / decayMs;
+            p.reward   -= (now - p.lastDecay) / decayMs;
             p.lastDecay = now;
-            if (p.reward <= 0) beliefs.parcels.delete(id)
+            if (p.reward <= 0) { beliefs.parcels.delete(id); continue; }
         }
 
+        // 1) Decadimento temporale di P(esiste). Più veloce se un nemico è vicino
+        //    al pacco (può averlo già raccolto). "Visto tanto tempo fa → P bassa".
+        const dt = now - (p.lastConfUpdate ?? now);
+        p.lastConfUpdate = now;
+        let lambda = CONF_LAMBDA;
+        for (const a of beliefs.agents.values())
+            if (smartDist(a, p) <= ENEMY_NEAR_DIST) { lambda *= ENEMY_DECAY_MULT; break; }
+        let c = (p.confidence ?? 1) * Math.exp(-lambda * dt);
+
+        // 2) Dentro il raggio di osservazione ma NON lo vedo → forte evidenza che
+        //    non c'è più: revisione bayesiana  P(E|¬Seen)=P(¬Seen|E)·P(E)/P(¬Seen),
+        //    con P(¬Seen|E)=1−affidabilità sensore e P(¬Seen|¬E)=1.
+        if (smartDist(beliefs.me, p) < obsDist) {
+            const pNsE = 1 - SENSOR_RELIABILITY;
+            c = (pNsE * c) / (pNsE * c + (1 - c));
+        }
+
+        p.confidence = c;
+        if (c < CONF_EPS) beliefs.parcels.delete(id);   // confidenza troppo bassa → "perso"
     }
 
     //console.log(`[updateSensing] parcels visibili:`, seen.size, `| in memoria:`, beliefs.parcels.size - seen.size);
@@ -206,8 +237,7 @@ export function updateSensing(sensing) {
         if (!carriedIds.has(id)) beliefs.collectedReward.delete(id);
     // console.log(`[updateSensing] carrying:`, beliefs.carrying);
     //console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
-
-    updateAgents(sensing.agents ?? []);
+    // NB: updateAgents è già stato chiamato sopra (prima della riconciliazione pacchi).
 }
 
 export function updateAgents(agents) {

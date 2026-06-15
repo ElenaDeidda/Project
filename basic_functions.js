@@ -114,7 +114,11 @@ export const scoreParcel = (me, parcel, knownAgents = [], deliveryDist = 0, myDi
  
     if (myDist === Infinity) return -Infinity;
  
-    const reward = parcel.reward ?? parcel.value ?? 0;
+    // Valore ATTESO: reward × P(esiste ancora). confidence assente (es. BDI base,
+    // pacco visto ora) → 1 → comportamento invariato. Modello "with uncertainty".
+    const baseReward = parcel.reward ?? parcel.value ?? 0;
+    const confidence = parcel.confidence ?? 1;
+    const reward = baseReward * confidence;
     if (reward <= 0) return -Infinity;
  
     // Distanza totale del ciclo: me → pacco → delivery

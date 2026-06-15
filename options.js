@@ -292,6 +292,10 @@ function isCarrying() {
 
 // ─── sezioni di generateOptions ───────────────────────────────────────────────
 
+// Soglia di confidenza sotto cui un pacco non è abbastanza "credibile" da
+// inseguirlo (modello with uncertainty). Slide del prof: e.g. 0.3.
+const PICKUP_CONFIDENCE_MIN = 0.3;
+
 function buildPickupOptions(agentPositions, dist) {
     const options = [];
     const blocked = getBlockedCells();
@@ -299,6 +303,10 @@ function buildPickupOptions(agentPositions, dist) {
     for (const [id, parcel] of beliefs.parcels.entries()) {
         // Già portato da qualcuno
         if (parcel.carriedBy) continue;
+
+        // Modello "with uncertainty": se P(esiste ancora) è sotto soglia NON
+        // generiamo l'opzione di raccolta (slide: "does not generate the option").
+        if ((parcel.confidence ?? 1) < PICKUP_CONFIDENCE_MIN) continue;
 
         // Tile occupata da un agente avversario: non riusciremmo a raccoglierlo
         const key = `${Math.round(parcel.x)}_${Math.round(parcel.y)}`;
