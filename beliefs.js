@@ -184,6 +184,7 @@ export function updateSensing(sensing) {
     const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
     beliefs.carrying       = mine.length > 0;
     beliefs.carriedParcels = mine;
+    
     // Valore di OGNI pacco AL MOMENTO DELLA RACCOLTA (per il fallback "consegna
     // comunque" dello stack: consegna se un pacco è sceso del N% del suo valore
     // originale). Registriamo alla prima volta che lo vediamo in mano e puliamo
@@ -194,7 +195,6 @@ export function updateSensing(sensing) {
         if (!beliefs.collectedReward.has(p.id)) beliefs.collectedReward.set(p.id, p.reward);
     for (const id of beliefs.collectedReward.keys())
         if (!carriedIds.has(id)) beliefs.collectedReward.delete(id);
-
     // console.log(`[updateSensing] carrying:`, beliefs.carrying);
     //console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
 
@@ -243,7 +243,6 @@ export function getBlockedCells() {
     //console.log(`[getBlockedCells] celle bloccate:`, blocked.size);
     return blocked;
 }
-
 export function getAgentPositions() {
     const out = [];
     for (const a of beliefs.agents.values()) {

@@ -73,7 +73,6 @@ function aParcelDecayedTooMuch() {
     return false;
 }
 
-
 // max_deliver_reward = T: consegnare un pacco che vale > T dà 0. null se assente.
 function maxDeliverEffective() {
     const v = beliefs.activeRules?.maxDeliverReward;
@@ -85,6 +84,7 @@ function logDeliverRule(msg) {
     _lastDeliverRuleLog = msg;
     console.log(`[DELIVER-RULE] ${msg}`);
 }
+
 
 
 
@@ -174,6 +174,29 @@ function shouldDeliver() {
 
     const stackN = stackSizeEffective();   // null se nessuna regola stack_size
 
+    // ─── max_deliver_reward: consegnare un pacco > T dà 0 ────────────────────
+    // Strategia "a pacco": consegno OGNI pacco nell'istante in cui decade a ~T
+    // (massimo valore consentito). Il trigger guarda il pacco PIÙ BASSO (il più
+    // vicino a T, cioè il più urgente): quando arriverà a ≤ T parto verso la
+    // delivery. La consegna selettiva (moves.js/plans.js via deliverableIds)
+    // molla TUTTI i ≤ T e TIENE i > T per il giro successivo, così ogni pacco
+    // esce a ~T e i piccoli non decadono fino a 0 aspettando i grandi.
+    const delT = maxDeliverEffective();
+    if (delT != null) {
+        if (deliverLatch) return true;
+        const minValue = beliefs.carriedParcels.reduce((m, p) => Math.min(m, p.reward ?? 0), Infinity);
+        const dist = nearestDeliveryDist(beliefs.me, beliefs.deliveryPoints);
+        const decayTravel = decayPerStep() * (Number.isFinite(dist) ? dist : 0);
+        // Parto quando il pacco più basso ARRIVERÀ a ≤ T (valore − decadimento in viaggio).
+        if (minValue - decayTravel <= delT) {
+            logDeliverRule(`max_deliver=${delT}: pacco più basso ${minValue.toFixed(0)} → all'arrivo ~${(minValue - decayTravel).toFixed(0)} ≤ ${delT} → PARTO e consegno i ≤${delT} (tengo i >${delT})`);
+            deliverReason = 'threshold';
+            return (deliverLatch = true);
+        }
+        logDeliverRule(`max_deliver=${delT}: pacco più basso ${minValue.toFixed(0)} ancora > ${delT} (all'arrivo ~${(minValue - decayTravel).toFixed(0)}) → tengo tutto e raccolgo`);
+        return false;
+    }
+
     // Inizializzazione una-tantum di N dalla config
     if (N_current === null) {
         N_current = computeInitialN();
@@ -261,7 +284,6 @@ function shouldDeliver() {
 
     return false;
 }
-
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function isCarrying() {
