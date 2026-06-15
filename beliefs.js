@@ -32,8 +32,10 @@ export function updateMap(width, height, tiles) {
         beliefs.mapTiles.set(key, { type: String(tile.type) });
         if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
         if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
-        if (tile.type === '5!') {
+        if (tile.type === '5!' || tile.type === '5') {
             beliefs.isCrateMap = true;
+        }
+        if (tile.type === '5!') {
             beliefs.crateTiles.set(key, { x: tile.x, y: tile.y });
         }
         //console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
