@@ -282,6 +282,54 @@ export class Deliver extends PlanBase {
     }
 }
 
+export class GoToSpawnCrate extends PlanBase {
+    #socket;
+    constructor(socket) { super(); this.#socket = socket; }
+    static isApplicableTo(action) { return action === 'go_to_spawn' && beliefs.isCrateMap; }
+
+    async execute(_action, x, y) {
+        if (this.stopped) throw ['stopped'];
+
+        if (x == null || y == null) {
+            await new Promise(r => setTimeout(r, 300));
+            return true;
+        }
+
+        console.log(`[CRATE_DEBUG] casse: ${[...beliefs.crateTiles.keys()].join(' ')}`);
+        const planSteps = await solveCratePath(beliefs, x, y);
+        if (!planSteps) {
+            console.warn(`[PLANS] GoToSpawnCrate: STALLO — nessun piano PDDL verso (${x},${y}). Casse bloccate.`);
+            await new Promise(r => setTimeout(r, 1000));
+            return true;
+        }
+
+        console.log(`[PLANS] GoToSpawnCrate PDDL → (${x},${y})`);
+        const moves = planToMoveSequence(planSteps);
+
+        for (const step of moves) {
+            if (this.stopped) throw ['stopped'];
+            const result = await this.#socket.emitMove(step.direction);
+            if (result?.x != null) {
+                beliefs.me.x = result.x;
+                beliefs.me.y = result.y;
+            } else {
+                throw [`Mossa '${step.direction}' rifiutata`];
+            }
+            if (step.isPush) {
+                const fromKey = `${step.crateFrom.x}_${step.crateFrom.y}`;
+                const toKey   = `${step.crateTo.x}_${step.crateTo.y}`;
+                beliefs.crateTiles.delete(fromKey);
+                beliefs.crateTiles.set(toKey, step.crateTo);
+                beliefs.mapTiles.set(fromKey, { type: '5' });
+                beliefs.mapTiles.set(toKey,   { type: '5!' });
+            }
+        }
+
+        await new Promise(r => setTimeout(r, 300));
+        return true;
+    }
+}
+
 export class GoToSpawn extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
@@ -312,4 +360,4 @@ export class GoToSpawn extends PlanBase {
     }
 }
 
-export const planLibrary = [GoPickUpCrate, DeliverCrate, GoPickUp, Deliver, GoToSpawn];
+export const planLibrary = [GoPickUpCrate, DeliverCrate, GoToSpawnCrate, GoPickUp, Deliver, GoToSpawn];
