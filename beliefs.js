@@ -23,6 +23,15 @@ export function updateConfig(config) {
 }
 
 export function updateMap(width, height, tiles) {
+    // Reset: onMap arriva con la mappa COMPLETA (anche a ogni restart partita).
+    // Senza azzerare, mapTiles/deliveryPoints/spawnVisibility si ACCUMULEREBBERO
+    // tra una partita e l'altra (es. delivery_points duplicati) → pathfinding
+    // confuso. Ricostruiamo da zero ogni volta.
+    beliefs.mapTiles.clear();
+    beliefs.deliveryPoints.length = 0;
+    beliefs.spawnVisibility.clear();
+    beliefs.isDirectionalMap = false;
+
     // --- 1. Costruisce mapTiles e deliveryPoints ---
     const ARROW_TYPES = new Set(['→', '←', '↑', '↓']);
     for (const tile of tiles) {
