@@ -28,7 +28,7 @@ function buildCrateDomain() {
     const push = new PddlAction(
         'push',
         '?me ?from ?crate ?behind',
-        'and (me ?me) (at ?me ?from) (connected ?from ?crate) (crate-at ?crate) (connected ?crate ?behind) (same-dir ?from ?crate ?behind) (not (crate-at ?behind)) (not (obstacle ?behind))',
+        'and (me ?me) (at ?me ?from) (connected ?from ?crate) (crate-at ?crate) (connected ?crate ?behind) (same-dir ?from ?crate ?behind) (not (crate-at ?behind)) (crate-slot ?behind)',
         'and (at ?me ?crate) (not (at ?me ?from)) (crate-at ?behind) (not (crate-at ?crate))'
     );
 
@@ -89,6 +89,14 @@ function buildCrateProblem(beliefs, targetX, targetY) {
             if (nTile) {
                 bs.declare(`connected ${tileId(x, y)} ${tileId(nx, ny)}`);
             }
+        }
+    }
+
+    // crate-slot: proprietà statica della tile (sia '5' vuota che '5!' occupata)
+    for (const [key, tile] of beliefs.mapTiles.entries()) {
+        if (tile.type === '5' || tile.type === '5!') {
+            const [x, y] = key.split('_').map(Number);
+            bs.declare(`crate-slot ${tileId(x, y)}`);
         }
     }
 
