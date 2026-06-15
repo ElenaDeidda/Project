@@ -128,7 +128,16 @@ function computeInitialN() {
 const PATROL_TIMEOUT_FACTOR   = 2;     // timeout = factor × intervallo di generazione
 const PATROL_TIMEOUT_FALLBACK = 4000;  // ms, se generation_event non è leggibile
 const EXHAUST_COOLDOWN_FACTOR = 3;     // per quanto una zona resta esclusa (× timeout)
-const ENEMY_ZONE_PENALTY      = 5;     // penalità di score per nemico vicino alla tile
+
+// ─── Minaccia nemici sulle spawn zone (modello probabilistico) ───────────────
+// Invece di "c'è un nemico vicino → penalità fissa", stimiamo la PROBABILITÀ che
+// una spawn tile sia "contesa", combinando vicinanza del nemico e allineamento
+// del suo heading verso quella tile. Le zone dove i nemici stanno andando
+// perdono punteggio → l'agente preferisce la zona libera ("migliore").
+const ENEMY_THREAT_PENALTY = 8;        // peso della penalità per zona contesa (P∈[0,1] × questo)
+const STATIONARY_WEIGHT    = 0.5;      // un nemico fermo conta come minaccia parziale (non sa dove va)
+// versori di heading coerenti con updateAgents (right:+x, left:-x, up:+y, down:-y)
+const DIR_VEC = { up:{x:0,y:1}, down:{x:0,y:-1}, left:{x:-1,y:0}, right:{x:1,y:0} };
 
 let lastPickupSeenTime = Date.now();   // ultima volta con ≥1 pacco raccoglibile visibile
 const exhaustedZones   = new Map();    // "x_y" centro zona esausta → scadenza (ms)
@@ -347,22 +356,51 @@ function buildDeliverOptions(dist) {
     return options;
 }
 
+// P(la tile (x,y) sia "contesa" da un nemico) — modello probabilistico.
+// Per ogni nemico visibile: vicinanza (decay esponenziale con la distanza) ×
+// allineamento del suo heading verso la tile (cos angolo, riscalato in [0,1]).
+// I contributi si combinano in noisy-OR: P = 1 − Π(1 − p_nemico) ∈ [0,1].
+function enemyThreatToward(x, y, range) {
+    let pSafe = 1, contributors = 0, nearest = Infinity, topDir = 'none';
+    for (const a of beliefs.agents.values()) {
+        const dx = x - a.x, dy = y - a.y;
+        const dist = Math.abs(dx) + Math.abs(dy);
+        if (dist > range * 2) continue;                 // troppo lontano → trascurabile
+        const prox = Math.exp(-dist / Math.max(1, range)); // 1 vicino → 0 lontano
+        let head;
+        if (!a.moving || a.direction === 'none') {
+            head = STATIONARY_WEIGHT;                    // fermo → minaccia ambientale
+        } else {
+            const hv = DIR_VEC[a.direction] ?? { x: 0, y: 0 };
+            const norm = Math.hypot(dx, dy) || 1;
+            const align = (hv.x * dx + hv.y * dy) / norm; // cos angolo ∈ [-1,1]
+            head = (align + 1) / 2;                       // verso la tile → ~1, opposto → ~0
+        }
+        const pe = prox * head;                           // P(questo nemico contende)
+        if (pe > 0.01) {
+            pSafe *= (1 - pe);
+            contributors++;
+            if (dist < nearest) { nearest = dist; topDir = a.direction; }
+        }
+    }
+    return { p: 1 - pSafe, contributors, nearest, topDir };
+}
+
 // Scompone lo score di una spawn tile nei suoi termini, così formula e log
 // usano un'unica fonte di verità.
-function spawnScoreBreakdown(x, y, agentPositions, obsDist, dist) {
+function spawnScoreBreakdown(x, y, obsDist, dist) {
     const myDist     = realDist(dist, x, y);   // distanza reale di percorso
     const delDist    = nearestDeliveryDist({ x, y }, beliefs.deliveryPoints);
     const visibility = beliefs.spawnVisibility.get(`${x}_${y}`) ?? 0;
 
-    let enemies = 0;
-    for (const a of agentPositions)
-        if (Math.abs(a.x - x) + Math.abs(a.y - y) <= obsDist) enemies++;
+    const threat = enemyThreatToward(x, y, obsDist); // P(zona contesa) ∈ [0,1]
 
-    const prox  = -(myDist + delDist);          // vicinanza a me e a un delivery
-    const vis   = visibility * VISIBILITY_BONUS; // visibilità spawn
-    const enemy = -enemies * ENEMY_ZONE_PENALTY; // penalità nemici (≤ 0)
+    const prox  = -(myDist + delDist);            // vicinanza a me e a un delivery
+    const vis   = visibility * VISIBILITY_BONUS;  // visibilità spawn
+    const enemy = -threat.p * ENEMY_THREAT_PENALTY; // penalità probabilistica (≤ 0)
 
-    return { score: prox + vis + enemy, prox, vis, enemy, enemies };
+    return { score: prox + vis + enemy, prox, vis, enemy,
+             threatP: threat.p, enemies: threat.contributors, threat };
 }
 
 let _lastPatrolLog = 0;   // throttle dei log di stato del pattugliamento
@@ -403,7 +441,7 @@ function buildSpawnOptions(agentPositions, dist) {
                 exhaustCenters.some(c => Math.abs(c.x - x) + Math.abs(c.y - y) <= obsDist))
                 continue;
 
-            const { score } = spawnScoreBreakdown(x, y, agentPositions, obsDist, dist);
+            const { score } = spawnScoreBreakdown(x, y, obsDist, dist);
             // Spawn tile irraggiungibile ora (muri/nemici) → score ∞ negativo → scarta
             if (!Number.isFinite(score)) continue;
             options.push(['go_to_spawn', x, y, score]);
@@ -416,15 +454,15 @@ function buildSpawnOptions(agentPositions, dist) {
     let options = build(true);
     if (options.length === 0) options = build(false);
 
-    // Log di stato (throttled ~1s) per tarare PATROL_TIMEOUT_FACTOR e ENEMY_ZONE_PENALTY
+    // Log di stato (throttled ~1s) per tarare PATROL_TIMEOUT_FACTOR e ENEMY_THREAT_PENALTY
     if (now - _lastPatrolLog > 1000 && options.length > 0) {
         _lastPatrolLog = now;
         const best = options.reduce((b, c) => c[3] > b[3] ? c : b);
-        const bd   = spawnScoreBreakdown(best[1], best[2], agentPositions, obsDist, dist);
+        const bd   = spawnScoreBreakdown(best[1], best[2], obsDist, dist);
         const waited = ((now - lastPickupSeenTime) / 1000).toFixed(1);
-        // console.log(`[PATROL] attesa ${waited}s / timeout ${(patrolTimeout() / 1000).toFixed(1)}s | ` +
-        //             `esauste: ${exhaustedZones.size} | best (${best[1]},${best[2]}) score=${bd.score.toFixed(1)} ` +
-        //             `[prox=${bd.prox} vis=${bd.vis} nemici=${bd.enemies}(${bd.enemy})]`);
+        console.log(`[PATROL] attesa ${waited}s / timeout ${(patrolTimeout() / 1000).toFixed(1)}s | ` +
+                    `esauste: ${exhaustedZones.size} | best (${best[1]},${best[2]}) score=${bd.score.toFixed(1)} ` +
+                    `[prox=${bd.prox.toFixed(1)} vis=${bd.vis.toFixed(1)} minaccia P=${bd.threatP.toFixed(2)}×${ENEMY_THREAT_PENALTY}=${bd.enemy.toFixed(1)} (${bd.enemies} nemici)]`);
     }
 
     return options;
