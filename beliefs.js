@@ -26,6 +26,13 @@ export const beliefs = {
     // per ogni spawn tile "x_y" → quante spawn tiles sono visibili da quel punto
     spawnVisibility: new Map(),
 
+    // Stato di coordinamento di team (livello 3). Inizializzato da
+    // coordination.js → initCoordination(). null = nessun coordinamento attivo.
+    //   frozen:   true → il loop BDI non si muove (red light)
+    //   override: predicate forzata da eseguire al posto della deliberazione
+    //   role:     'collector' | 'postman' | null (staffetta, task 2)
+    coord: null,
+
 };
 
 export function updateConfig(config) {
@@ -284,6 +291,8 @@ export function updateAgents(agents) {
             x: a.x, y: a.y,
             moving, direction,
             targetX, targetY,
+            teamId: a.teamId ?? null,                       // per distinguere alleati/nemici
+            isTeammate: !!(a.teamId && a.teamId === beliefs.me.teamId),
         });
 
         //console.log(`[updateAgents] "${a.name}" (${a.id}) @ (${a.x},${a.y}) moving:${moving} dir:${direction} → target:(${targetX},${targetY})`);
@@ -310,6 +319,13 @@ export function getAgentPositions() {
     }
     //console.log(`[getAgentPositions] posizioni note:`, out);
     return out;
+}
+
+// Compagno di team attualmente visibile (o null). Usato dal coordinamento di
+// livello 3 per sapere dove si trova l'alleato (es. attesa "incontro" staffetta).
+export function getTeammateAgent() {
+    for (const a of beliefs.agents.values()) if (a.isTeammate) return a;
+    return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

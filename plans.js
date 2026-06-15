@@ -1,8 +1,37 @@
 // plans.js — Piani eseguibili. Il socket viene passato nel costruttore.
-import { beliefs, deliverableIds } from './beliefs.js';
-import { navigateTo } from './moves.js';
+import { beliefs, deliverableIds, getBlockedCells } from './beliefs.js';
+import { navigateTo, reachableDistances } from './moves.js';
 import { smartDist } from './basic_functions.js';
 import { getPddlPlan, planToMoves } from './pddl_planner.js';
+import {
+    markArrived, isRendezvousDone, endRendezvous,
+    nearestReachableWithinDist, nearestRowTile, freeNeighborOf,
+    isPostmanReady, notifyPostmanReady, notifyDropped, wasDropped,
+    clearOverride,
+} from './coordination.js';
+
+// Attende che `cond()` sia vera; ritorna false al timeout, lancia ['stopped'] se
+// l'intenzione viene interrotta. Usato dai piani di coordinamento (attese di team).
+async function waitUntil(cond, shouldStop, timeoutMs = 60000, stepMs = 150) {
+    const t0 = Date.now();
+    while (!cond()) {
+        if (shouldStop && shouldStop()) throw ['stopped'];
+        if (Date.now() - t0 > timeoutMs) return false;
+        await new Promise(r => setTimeout(r, stepMs));
+    }
+    return true;
+}
+
+// Delivery point più vicino per distanza REALE di percorso (BFS).
+function nearestDeliveryPoint() {
+    const dist = reachableDistances(beliefs.me, beliefs.mapTiles, getBlockedCells(), beliefs.isDirectionalMap);
+    let best = null, bestD = Infinity;
+    for (const dp of beliefs.deliveryPoints) {
+        const d = dist.get(`${dp.x}_${dp.y}`);
+        if (d != null && d < bestD) { bestD = d; best = dp; }
+    }
+    return best ?? beliefs.deliveryPoints[0] ?? null;
+}
 
 class PlanBase {
     #stopped = false;
@@ -203,4 +232,145 @@ export class GoToSpawn extends PlanBase {
     }
 }
 
-export const planLibrary = [GoPickUp, Deliver, GoToSpawn];
+// ─────────────────────────────────────────────────────────────────────────────
+// PIANI DI COORDINAMENTO (livello 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TASK 1 — vai entro maxDist da (x,y), avvisa l'arrivo e aspetta l'alleato.
+export class GoNearAndWait extends PlanBase {
+    #socket;
+    constructor(socket) { super(); this.#socket = socket; }
+    static isApplicableTo(action) { return action === 'go_near_and_wait'; }
+
+    async execute(_action, x, y, maxDist = 3) {
+        if (this.stopped) throw ['stopped'];
+        const target = nearestReachableWithinDist({ x, y }, maxDist);
+        if (!target) throw [`Nessuna tile raggiungibile entro ${maxDist} da (${x},${y})`];
+
+        console.log(`[PLANS] GoNearAndWait → (${target.x},${target.y}) (≤${maxDist} da (${x},${y}))`);
+        const nav = await navigateTo(beliefs.me, target, this.#socket, beliefs.mapTiles, this.shouldStop);
+        if (nav === 'stopped') throw ['stopped'];
+        if (nav === 'failed')  throw [`Navigazione fallita verso (${target.x},${target.y})`];
+
+        markArrived();
+        const ok = await waitUntil(() => isRendezvousDone(), this.shouldStop, 60000);
+        if (this.stopped) throw ['stopped'];
+        console.log(`[PLANS] GoNearAndWait: ${ok ? 'tutti arrivati ✓' : 'timeout attesa alleato'}`);
+        endRendezvous();
+        return true;
+    }
+}
+
+// TASK 3 — vai su una riga della parità richiesta e congelati (red light).
+export class GoToRowAndWait extends PlanBase {
+    #socket;
+    constructor(socket) { super(); this.#socket = socket; }
+    static isApplicableTo(action) { return action === 'go_to_row_and_wait'; }
+
+    async execute(_action, parity = 'odd') {
+        if (this.stopped) throw ['stopped'];
+        const target = nearestRowTile(parity);
+        if (!target) throw [`Nessuna riga ${parity} raggiungibile`];
+
+        console.log(`[PLANS] GoToRowAndWait → (${target.x},${target.y}) riga ${parity}`);
+        const nav = await navigateTo(beliefs.me, target, this.#socket, beliefs.mapTiles, this.shouldStop);
+        if (nav === 'stopped') throw ['stopped'];
+        if (nav === 'failed')  throw [`Navigazione fallita verso (${target.x},${target.y})`];
+
+        beliefs.coord.frozen = true;   // il loop resta fermo finché non arriva "green"
+        clearOverride();
+        console.log(`[PLANS] GoToRowAndWait: su riga ${parity}, FERMO in attesa di "green"`);
+        return true;
+    }
+}
+
+// TASK 2 (raccoglitore) — vai alla tile di handover, ASPETTA il postino, molla.
+export class RelayDrop extends PlanBase {
+    #socket;
+    constructor(socket) { super(); this.#socket = socket; }
+    static isApplicableTo(action) { return action === 'relay_drop'; }
+
+    async execute(_action, x, y, ids) {
+        if (this.stopped) throw ['stopped'];
+        console.log(`[PLANS] RelayDrop → handover (${x},${y})`);
+        const nav = await navigateTo(beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop);
+        if (nav === 'stopped') throw ['stopped'];
+        if (nav === 'failed')  throw [`Navigazione fallita verso handover (${x},${y})`];
+
+        const ready = await waitUntil(() => isPostmanReady(), this.shouldStop, 60000);
+        if (this.stopped) throw ['stopped'];
+        if (!ready) console.warn('[PLANS] RelayDrop: timeout attesa postino — lascio comunque');
+
+        const dropIds = (Array.isArray(ids) && ids.length) ? ids : deliverableIds(beliefs);
+        const dropped = await this.#socket.emitPutdown(dropIds);
+        const set = new Set(dropIds);
+        beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
+        beliefs.carrying = beliefs.carriedParcels.length > 0;
+        notifyDropped();
+        clearOverride();
+        console.log(`[PLANS] RelayDrop: lasciati ${dropped?.length ?? dropIds.length} pacchi → torno a raccogliere`);
+        return true;
+    }
+}
+
+// TASK 2 (postino) — vai alla tile di handover, segnala, raccogli, consegna.
+export class RelayFetch extends PlanBase {
+    #socket;
+    constructor(socket) { super(); this.#socket = socket; }
+    static isApplicableTo(action) { return action === 'relay_fetch'; }
+
+    async execute(_action, x, y) {
+        if (this.stopped) throw ['stopped'];
+        const H = { x, y };
+        // Mi avvicino a una tile ADIACENTE libera: la tile di handover è (sarà)
+        // occupata dal raccoglitore, quindi non posso starci sopra finché non molla.
+        const spot = freeNeighborOf(H);
+        console.log(`[PLANS] RelayFetch → mi avvicino a handover (${x},${y}) via (${spot.x},${spot.y})`);
+        const nav = await navigateTo(beliefs.me, spot, this.#socket, beliefs.mapTiles, this.shouldStop);
+        if (nav === 'stopped') throw ['stopped'];
+        if (nav === 'failed')  throw [`Navigazione fallita verso handover (${x},${y})`];
+
+        notifyPostmanReady();
+        const ok = await waitUntil(() => wasDropped(), this.shouldStop, 60000);
+        if (this.stopped) throw ['stopped'];
+        if (!ok) console.warn('[PLANS] RelayFetch: timeout attesa drop del raccoglitore');
+
+        // Il raccoglitore ha lasciato i pacchi e si sta spostando: entro sulla
+        // tile di handover (riprovo finché la libera) e raccolgo.
+        for (let k = 0; k < 10 && !this.stopped; k++) {
+            const r = await navigateTo(beliefs.me, H, this.#socket, beliefs.mapTiles, this.shouldStop);
+            if (r === 'reached') break;
+            if (r === 'stopped') throw ['stopped'];
+            await new Promise(res => setTimeout(res, 200));
+        }
+        const picked = await this.#socket.emitPickup();
+        if (picked && picked.length) {
+            beliefs.carrying = true;
+            beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
+        }
+        console.log(`[PLANS] RelayFetch: raccolti ${picked?.length ?? 0} pacchi → consegno`);
+
+        const target = nearestDeliveryPoint();
+        if (target) {
+            const dn = await navigateTo(beliefs.me, target, this.#socket, beliefs.mapTiles, this.shouldStop);
+            if (dn === 'stopped') throw ['stopped'];
+            const dids = deliverableIds(beliefs);
+            if (dids.length) {
+                await this.#socket.emitPutdown(dids);
+                const set = new Set(dids);
+                beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
+                beliefs.carrying = beliefs.carriedParcels.length > 0;
+            }
+        }
+        beliefs.coord._handover = null;
+        beliefs.coord._dropped  = false;
+        clearOverride();
+        console.log(`[PLANS] RelayFetch: consegnato. Score: ${beliefs.me.score}`);
+        return true;
+    }
+}
+
+export const planLibrary = [
+    GoPickUp, Deliver, GoToSpawn,
+    GoNearAndWait, GoToRowAndWait, RelayDrop, RelayFetch,
+];

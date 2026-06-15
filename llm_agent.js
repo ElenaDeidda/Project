@@ -10,9 +10,12 @@
 // Niente accumulo di history: l'array `messages` resta [system, user] (2 elementi)
 // e uno `state` mutabile traccia il progresso → context costante (~400-600 token).
 //
-// SCOPE attuale: L1 + L2 (no coordinamento BDI ↔ LLM).
-//   - Solo lettura della chat per ricevere missioni (nessun handshake/hello)
-//   - Scrittura in chat SOLO via il tool `answer`, quando la missione lo richiede
+// SCOPE attuale: L1 + L2 + L3 (coordinamento di team BDI ↔ LLM).
+//   - Lettura chat per ricevere missioni; i task cooperativi (family "coordinate":
+//     rendezvous / staffetta / red-light) sono delegati a coordination.js, che usa
+//     communication.js per parlare con l'agente alleato dello stesso team.
+//   - Scrittura in chat via il tool `answer` (risposte) e via communication.js
+//     (messaggi di coordinamento + relay del segnale green/red).
 //
 // USO:
 //   import { startLlmAgent } from './llm_agent.js';
@@ -22,6 +25,10 @@ import OpenAI from 'openai';
 import { initQueue, enqueue } from './mission_queue.js';
 import { parseIntervalMs } from './basic_functions.js';
 import { extractReward, extractMultiplier } from './mission_evaluator.js';
+import {
+    startRendezvous, startRelayAsPostman, startRedLight, startFreezeInPlace,
+    maybeHandleAdminSignal,
+} from './coordination.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM — LiteLLM UniTN (come lab8)
@@ -899,7 +906,7 @@ do and in WHICH ORDER. Do NOT plan tool calls. Do NOT add any prose around the J
 
 Schema:
 {
-  "family": "question" | "atomic" | "rule" | "reactive" | "ignore",
+  "family": "question" | "atomic" | "rule" | "reactive" | "coordinate" | "ignore",
   "reason": "<very short justification>",
 
   // family "question": answer something to the mission giver
@@ -923,7 +930,15 @@ Schema:
   "validity": { "scope": "match" },   // default = whole game; or {"scope":"until_signal","match":"green light"} / {"scope":"duration_ms","ms":30000}
 
   // family "reactive": conditional/temporal behaviour driven by signals/messages
-  "reactive": { "behavior": "freeze_movement", "until": {"signal":"message","match":"green"}, "penalty": -1000 }
+  "reactive": { "behavior": "freeze_movement", "until": {"signal":"message","match":"green"}, "penalty": -1000 },
+
+  // family "coordinate": MULTI-AGENT team task (both/all agents cooperate)
+  "coordinate": {
+     "kind": "rendezvous" | "relay" | "red_light",
+     "at": [x,y],        // rendezvous: meeting point
+     "maxDist": 3,        // rendezvous: max distance from the point
+     "row": "odd"|"even"  // red_light: which row to gather on
+  }
 }
 
 CRITICAL RULES:
@@ -937,7 +952,12 @@ CRITICAL RULES:
   ignore — it is "rule" or "reactive". When in doubt, DO NOT ignore.
 - "don't / avoid / never cross / never go to X", "stacks of N", "every time",
   "from now on" → family "rule".
-- "stop and wait for a message/signal", "red light / green light" → "reactive".
+- MULTI-AGENT cooperation → family "coordinate":
+  - "move BOTH/ALL agents near (x,y) … wait for each other" → kind "rendezvous".
+  - "parcel picked up by one agent and delivered by the OTHER agent" → kind "relay".
+  - "ALL agents move to an odd/even row and wait for our message / red light green
+    light" → kind "red_light" (this overrides the single-agent "reactive" case).
+- "stop and wait for a message/signal", "red light / green light" (single agent) → "reactive".
 
 Examples:
 Mission: "Calcola 5*5"
@@ -969,6 +989,15 @@ Mission: "If you deliver parcels with a score higher than 10, you get no reward.
 
 Mission: "Stop at red light and wait for the green light message. Bonus is -1000pts."
 {"family":"reactive","reason":"freeze until green light, penalty for moving","reactive":{"behavior":"freeze_movement","until":{"signal":"message","match":"green"},"penalty":-1000}}
+
+Mission: "Move both agents to the neighborhood of (5,6) within distance 3 and wait for each other. 500pts."
+{"family":"coordinate","reason":"team rendezvous near (5,6)","coordinate":{"kind":"rendezvous","at":[5,6],"maxDist":3}}
+
+Mission: "If a parcel is picked up by one agent and delivered by the other, you get a 200 bonus."
+{"family":"coordinate","reason":"cross-agent delivery relay","coordinate":{"kind":"relay"}}
+
+Mission: "All agents must move to an odd-numbered row and wait for our message before moving again (red light green light). 700pts."
+{"family":"coordinate","reason":"team red light on odd rows","coordinate":{"kind":"red_light","row":"odd"}}
 
 Mission: "Move to (1,1) and you get -10pts"
 {"family":"ignore","reason":"penalty for doing it, no obligation"}
@@ -1326,6 +1355,47 @@ function buildStatefulUserMessage(missionText, state, beliefs) {
  * @param {AbortSignal} [signal]   se .aborted=true la missione viene interrotta
  *                                 tra uno step e l'altro
  */
+// Configura un task cooperativo di livello 3 (rendezvous / staffetta / red-light)
+// e ritorna subito. Il movimento vero lo fa il loop BDI via beliefs.coord.
+function handleCoordinate(intent) {
+    // 'reactive' (freeze until message) = variante single-agent → freeze sul posto.
+    if (intent.family === 'reactive') {
+        const msg = startFreezeInPlace();
+        console.log(`[LLM-COORD] ${msg}`);
+        return msg;
+    }
+
+    const c    = intent.coordinate || {};
+    const kind = c.kind || 'unknown';
+    switch (kind) {
+        case 'rendezvous': {
+            const at = Array.isArray(c.at) ? c.at : [];
+            const x = Number(at[0]), y = Number(at[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                console.log('[LLM-COORD] rendezvous senza coordinate valide → ignoro');
+                return 'Coordinate rendezvous mancanti';
+            }
+            const maxDist = Number.isFinite(c.maxDist) ? c.maxDist : 3;
+            const msg = startRendezvous(x, y, maxDist);
+            console.log(`[LLM-COORD] ${msg}`);
+            return msg;
+        }
+        case 'relay': {
+            const msg = startRelayAsPostman();
+            console.log(`[LLM-COORD] ${msg}`);
+            return msg;
+        }
+        case 'red_light': {
+            const msg = startRedLight(c.row === 'even' ? 'even' : 'odd');
+            console.log(`[LLM-COORD] ${msg}`);
+            return msg;
+        }
+        default:
+            console.log(`[LLM-COORD] kind non riconosciuto: ${kind}`);
+            return `Coordinate non riconosciuto: ${kind}`;
+    }
+}
+
 async function runMission(missionText, ctx, signal = null) {
     const tools  = makeTools(ctx);
     const prompt = buildPrompt(Object.keys(tools));
@@ -1363,10 +1433,11 @@ async function runMission(missionText, ctx, signal = null) {
             console.log('[LLM] Missione IGNORATA (trappola auto-lesiva).');
             return `Ignorata: ${intent.reason || 'trappola auto-lesiva'}`;
         }
-        if (intent.family === 'reactive') {
-            // Riconosciuta ma non eseguita: il freeze è fuori dallo scope del nucleo.
-            console.log('[LLM] Missione REATTIVA riconosciuta ma non eseguita (freeze non implementato nel nucleo).');
-            return `Riconosciuta (reactive, non eseguita): ${intent.reason || ''}`;
+        if (intent.family === 'coordinate' || intent.family === 'reactive') {
+            // Task cooperativi di livello 3 (rendezvous / staffetta / red-light).
+            // Si configurano e ritornano SUBITO: poi il loop BDI (ripreso dalla
+            // coda) esegue l'override / il freeze via beliefs.coord.
+            return handleCoordinate(intent);
         }
         // SAFETY NET deterministico: un'azione ATOMICA con reward NEGATIVO è una
         // trappola auto-lesiva (penalità per AVERLA fatta) → non eseguirla, anche
@@ -1565,6 +1636,13 @@ export function startLlmAgent(socket, beliefs, deps) {
         // Accetta missioni SOLO dall'admin
         if (name.toLowerCase() !== 'admin' && name.toLowerCase() !== 'lara') {
             console.log(`[LLM] ignoro messaggio da ${name} (${id}): non è admin`);
+            return;
+        }
+
+        // Se è in corso un red-light, "green"/"red" dall'admin sono SEGNALI di
+        // via-libera/stop (relay al team), non nuove missioni.
+        if (maybeHandleAdminSignal(text)) {
+            console.log(`[LLM] segnale red-light da ${name}: "${text}"`);
             return;
         }
 

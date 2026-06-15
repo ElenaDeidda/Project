@@ -2,6 +2,7 @@ import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
 import { beliefs, updateConfig, updateMap, updateSensing } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
+import { initCoordination, relayInterceptDeliver } from './coordination.js';
 import dotenv from 'dotenv';
 import fs from 'fs';
 
@@ -120,15 +121,30 @@ const { width, height } = await mapReady;
 // console.log(`Connesso Agente ${beliefs.me.name} con id = ${beliefs.me.id}, @ (${beliefs.me.x},${beliefs.me.y})`);
 // console.log(`Mappa: ${width}x${height} | Delivery points: ${beliefs.deliveryPoints.length}`);
 
+// Coordinamento di team (livello 3): accende communication.js e i beliefs.coord.
+initCoordination(socket);
+
+// Sceglie e pusha l'intenzione corrente, dando precedenza al coordinamento:
+//   - frozen   → resta fermo (red light)
+//   - override → esegue la predicate forzata (rendezvous / staffetta)
+//   - altrimenti deliberazione normale (con eventuale dirottamento staffetta)
+function pushNext() {
+    const coord = beliefs.coord;
+    if (coord?.frozen)   { agent.stop(); return; }
+    if (coord?.override) { agent.push(coord.override); return; }
+    const predicate = relayInterceptDeliver(deliberate(generateOptions()));
+    agent.push(predicate);
+}
+
 // Registra sensing DOPO che beliefs.me.id è garantito impostato da onYou
 socket.onSensing( (s) => {
     updateSensing(s);
-    agent.push( deliberate( generateOptions() ) );
+    pushNext();
 });
 
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
 // Utile quando un pacco sparisce per timer (non arriva nessun sensing)
 while (true) {
-    agent.push( deliberate( generateOptions() ) );
+    pushNext();
     await new Promise(r => setTimeout(r, 200));
 }
