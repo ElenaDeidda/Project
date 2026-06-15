@@ -250,3 +250,67 @@ export function getAgentPositions() {
     //console.log(`[getAgentPositions] posizioni note:`, out);
     return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Riconcilia la posizione delle casse con lo stato reale del server.
+// Va chiamata ad ogni onSensing, DOPO updateSensing().
+// Usa sensing.crates se disponibile, altrimenti inferisce dalle tile visibili.
+// ─────────────────────────────────────────────────────────────────────────────
+export function updateCrates(sensing) {
+    if (!beliefs.isCrateMap) return;
+
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+    const me = beliefs.me;
+    const mx = Math.round(me.x);
+    const my = Math.round(me.y);
+
+    // --- Strategia A: il server manda sensing.crates ---
+    if (sensing.crates && sensing.crates.length > 0) {
+        const serverCrateKeys = new Set(
+            sensing.crates.map(c => `${Math.round(c.x)}_${Math.round(c.y)}`)
+        );
+
+        for (const [key, tile] of beliefs.mapTiles.entries()) {
+            if (tile.type !== '5' && tile.type !== '5!') continue;
+            const [x, y] = key.split('_').map(Number);
+            if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue; // fuori vista
+
+            const serverHasCrate = serverCrateKeys.has(key);
+            const weThinkHasCrate = beliefs.crateTiles.has(key);
+
+            if (weThinkHasCrate && !serverHasCrate) {
+                beliefs.crateTiles.delete(key);
+                beliefs.mapTiles.set(key, { type: '5' });
+                console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — riconciliazione server`);
+            }
+            if (!weThinkHasCrate && serverHasCrate) {
+                beliefs.crateTiles.set(key, { x, y });
+                beliefs.mapTiles.set(key, { type: '5!' });
+                console.log(`[BELIEFS] cassa aggiunta a (${x},${y}) — riconciliazione server`);
+            }
+        }
+        return;
+    }
+
+    // --- Strategia B: sensing.crates non disponibile → usa sensing.positions ---
+    // Le positions sono le tile percorribili visibili. Se una tile '5!' è
+    // nel raggio visivo e il server la manda come positions (percorribile),
+    // significa che la cassa non c'è più lì.
+    if (!sensing.positions || sensing.positions.length === 0) return;
+
+    const walkableVisible = new Set(
+        sensing.positions.map(p => `${Math.round(p.x)}_${Math.round(p.y)}`)
+    );
+
+    for (const [key] of beliefs.crateTiles.entries()) {
+        const [x, y] = key.split('_').map(Number);
+        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue; // fuori vista
+
+        // Se il server dice che quella tile è percorribile (walkable), la cassa non c'è più
+        if (walkableVisible.has(key)) {
+            beliefs.crateTiles.delete(key);
+            beliefs.mapTiles.set(key, { type: '5' });
+            console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — tile ora walkable (fallback positions)`);
+        }
+    }
+}
