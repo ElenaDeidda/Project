@@ -172,7 +172,10 @@ async function callSolver(beliefs, targetX, targetY) {
     const domain  = buildDomain();
     const problem = buildProblem(beliefs, targetX, targetY);
 
-    console.log('[PDDL_CREATES] Invio al solver online...');
+    console.log(`[PDDL_CREATES] Casse nei beliefs (${beliefs.crateTiles.size}):`,
+        [...beliefs.crateTiles.keys()].join(', ') || 'nessuna');
+    console.log('[PDDL_CREATES] DOMAIN:\n' + domain);
+    console.log('[PDDL_CREATES] PROBLEM:\n' + problem);
 
     const rawPlan = await Promise.race([
         onlineSolver(domain, problem),
