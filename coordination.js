@@ -19,7 +19,7 @@ import { reachableDistances } from './moves.js';
 let _socket = null;
 let _started = false;
 
-function log(msg) { console.log(`[COORD] ${msg}`); }
+function log(msg) { console.log(`[COORD:${beliefs?.me?.name || '?'}] ${msg}`); }
 
 function defaultCoord() {
     return {

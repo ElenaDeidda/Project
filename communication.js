@@ -11,6 +11,11 @@
 
 const MY_ROLE = process.env.ROLE || 'peer'; // 'bdi' | 'llm' | 'peer'
 
+// Log del traffico di team: ON di default, silenziabile con COMMS_DEBUG=false.
+// Prefisso col NOME dell'agente (quando disponibile) per distinguere i 2 processi.
+const COMMS_DEBUG = process.env.COMMS_DEBUG !== 'false';
+function dbg(m) { if (COMMS_DEBUG) console.log(`[COMMS:${_beliefs?.me?.name || MY_ROLE}] ${m}`); }
+
 let _socket   = null;
 let _beliefs  = null;                 // riferimento ai beliefs per leggere teamId on-the-fly
 const _handlers    = new Map();       // type -> [callback]
@@ -38,11 +43,27 @@ export function initComms(socket, beliefs) {
     // Tutti i messaggi del team passano da qui
     socket.onMsg((id, name, msg, reply) => {
         const myTeam = teamId();
+
+        // DEBUG: traccia i messaggi di coordinamento (oggetti con .type), così si
+        // vede SE e COSA arriva — anche quelli scartati (team diverso).
+        if (msg && typeof msg === 'object' && msg.type) {
+            if (!myTeam) {
+                dbg(`✗ ricevuto '${msg.type}' da ${name}(${id}) ma il MIO teamId è vuoto → scartato`);
+            } else if (msg.teamId !== myTeam) {
+                dbg(`✗ ricevuto '${msg.type}' da ${name}(${id}) team=${msg.teamId} ≠ mio(${myTeam}) → scartato`);
+            } else {
+                dbg(`✓ ricevuto '${msg.type}' da ${name}(${id})`);
+            }
+        }
+
         // Scarta messaggi senza teamId o di team diversi
         if (!msg || !myTeam || msg.teamId !== myTeam) return;
 
-        // Registra l'alleato
-        if (id) _teammates.add(id);
+        // Registra l'alleato (log solo alla PRIMA scoperta)
+        if (id && !_teammates.has(id)) {
+            _teammates.add(id);
+            dbg(`🤝 alleato scoperto: ${name}(${id})${msg.type === 'hello' ? ` role=${msg.payload?.role}` : ''}`);
+        }
 
         // Risposta a una ask in sospeso
         if (msg.type === '__reply__' && _pendingAsks.has(msg.askId)) {
@@ -66,7 +87,7 @@ export function initComms(socket, beliefs) {
 
     // Handshake iniziale: annuncio la mia presenza al team
     socket.emitShout({ teamId: teamId(), type: 'hello', payload: { role: MY_ROLE } });
-    // console.log(`[COMMS] Inizializzato — team=${teamId()} role=${MY_ROLE}`);
+    dbg(`inizializzato — team=${teamId() || '??'} role=${MY_ROLE} → inviato 'hello'`);
 }
 
 
@@ -87,13 +108,15 @@ export function onTeamMessage(type, cb) {
 
 /** Manda a tutti gli alleati (shout filtrato per team) */
 export function broadcast(type, payload) {
-    if (!_socket) return;
+    if (!_socket) { dbg(`⚠ broadcast '${type}' ignorato: socket non inizializzato`); return; }
+    dbg(`→ broadcast '${type}' (team=${teamId() || '??'})`);
     _socket.emitShout({ teamId: teamId(), type, payload });
 }
 
 /** Manda a un alleato specifico */
 export function sendTo(teammateId, type, payload) {
-    if (!_socket) return;
+    if (!_socket) { dbg(`⚠ sendTo '${type}' ignorato: socket non inizializzato`); return; }
+    dbg(`→ sendTo ${teammateId} '${type}'`);
     _socket.emitSay(teammateId, { teamId: teamId(), type, payload });
 }
 
