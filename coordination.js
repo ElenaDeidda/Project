@@ -36,6 +36,8 @@ function defaultCoord() {
         _handover:   null,  // { tile:{x,y}, ids:[...] } handover in corso (postman)
         _postmanReady: false, // il postino è arrivato alla tile di handover (collector)
         _dropped:    false, // il collector ha lasciato i pacchi (postman)
+        _relayBusy:  false, // collector: handover in corso, NON avviarne un altro
+        _dropTile:   null,  // collector: tile dove ho ceduto i pacchi (non ri-raccoglierli)
     };
 }
 
@@ -65,10 +67,17 @@ export function initCoordination(socket) {
         log(`staffetta: sono il RACCOGLITORE, postino = ${from}`);
     });
     onTeamMessage('coord_handover', (p, from) => {       // lato POSTINO
-        beliefs.coord._collector = from;
-        beliefs.coord._handover  = { tile: p.tile, ids: p.ids ?? [] };
-        beliefs.coord._dropped   = false;
-        beliefs.coord.override   = ['relay_fetch', p.tile.x, p.tile.y];
+        const c = beliefs.coord;
+        // Un fetch è già in corso → ignoro (la staffetta è serializzata: il
+        // raccoglitore non dovrebbe mandarne un altro finché non consegno).
+        if (c.override?.[0] === 'relay_fetch') {
+            log(`staffetta: handover (${p.tile.x},${p.tile.y}) ignorato — sto già recuperando`);
+            return;
+        }
+        c._collector = from;
+        c._handover  = { tile: p.tile, ids: p.ids ?? [] };
+        c._dropped   = false;
+        c.override   = ['relay_fetch', p.tile.x, p.tile.y];
         log(`staffetta: ricevuto handover su (${p.tile.x},${p.tile.y}) — vado a recuperare`);
     });
     onTeamMessage('coord_postman_ready', () => {         // lato RACCOGLITORE
@@ -78,6 +87,11 @@ export function initCoordination(socket) {
     onTeamMessage('coord_dropped', () => {               // lato POSTINO
         beliefs.coord._dropped = true;
         log('staffetta: il raccoglitore ha lasciato i pacchi → li prendo');
+    });
+    onTeamMessage('coord_relay_done', () => {            // lato RACCOGLITORE
+        beliefs.coord._relayBusy = false;
+        beliefs.coord._dropTile  = null;
+        log('staffetta: il postino ha CONSEGNATO → posso cedere il prossimo carico');
     });
 
     // ── RED LIGHT (task 3) ─────────────────────────────────────────────────
@@ -206,6 +220,21 @@ export function notifyDropped() {
     log('staffetta: ho avvisato il postino di aver lasciato i pacchi');
 }
 
+/** Il postino segnala al raccoglitore di aver CONSEGNATO (sblocca il prossimo). */
+export function notifyRelayDone() {
+    const to = beliefs.coord?._collector;
+    if (to) sendTo(to, 'coord_relay_done', {});
+    log('staffetta: ho avvisato il raccoglitore di aver consegnato');
+}
+
+/** true se NON devo raccogliere il pacco in (x,y): è quello appena ceduto al
+ *  postino (evita che il raccoglitore se lo ri-prenda creando un loop). */
+export function isReservedForPostman(x, y) {
+    const c = beliefs.coord;
+    return !!(c && c.role === 'collector' && c._relayBusy && c._dropTile
+        && Math.round(x) === c._dropTile.x && Math.round(y) === c._dropTile.y);
+}
+
 export function clearOverride() { if (beliefs.coord) beliefs.coord.override = null; }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -217,16 +246,26 @@ export function clearOverride() { if (beliefs.coord) beliefs.coord.override = nu
 export function relayInterceptDeliver(predicate) {
     const c = beliefs.coord;
     if (!c || c.role !== 'collector') return predicate;
-    if (!Array.isArray(predicate) || predicate[0] !== 'deliver') return predicate;
     if (c.override) return c.override;                       // handover già in corso
+    if (!Array.isArray(predicate) || predicate[0] !== 'deliver') return predicate;
+
+    // Staffetta SERIALIZZATA: un handover alla volta. Se il postino non ha ancora
+    // consegnato il carico precedente, NON ne avvio un altro — tengo i pacchi e
+    // aspetto (resto in zona senza consegnare da solo, per non perdere il bonus).
+    if (c._relayBusy) {
+        log('staffetta: postino ancora in consegna → aspetto prima di cedere altro');
+        return ['go_to_spawn'];
+    }
 
     const delivery = { x: predicate[1], y: predicate[2] };
     const H   = handoverTile(beliefs.me, delivery);
     const ids = deliverableIds(beliefs);
     if (!H || ids.length === 0) return predicate;            // fallback: consegna normale
 
-    c.override     = ['relay_drop', H.x, H.y, ids];
+    c._relayBusy    = true;
+    c._dropTile     = { x: H.x, y: H.y };
     c._postmanReady = false;
+    c.override      = ['relay_drop', H.x, H.y, ids];
     sendTo(c._postman, 'coord_handover', { tile: H, ids });
     log(`staffetta: consegna dirottata sulla tile di handover (${H.x},${H.y}) — ${ids.length} pacchi`);
     return c.override;

@@ -167,7 +167,12 @@ async function opportunisticActions(me, socket) {
     const stackCapReached = Number.isInteger(Ncap)
         && typeof beliefs.activeRules?.maxDeliverReward !== 'number'
         && beliefs.carriedParcels.length >= Ncap;
-    if (!stackCapReached)
+    // Staffetta: se sono il raccoglitore e questa è la tile di handover dove ho
+    // appena ceduto i pacchi, NON li riprendo automaticamente (li aspetta il postino).
+    const c = beliefs.coord;
+    const relayReserved = c?.role === 'collector' && c?._relayBusy && c?._dropTile
+        && x === c._dropTile.x && y === c._dropTile.y;
+    if (!stackCapReached && !relayReserved)
     for (const p of beliefs.parcels.values()) {
         if (p.carriedBy) continue;
         if (Math.round(p.x) !== x || Math.round(p.y) !== y) continue;
