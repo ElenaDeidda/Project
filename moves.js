@@ -75,6 +75,7 @@ function aStarPath(start, goal, walkableTiles, blocked, isDirectional = false) {
             const tile = walkableTiles.get(nKey);
             if (!tile) continue;
             if (tile.type === 0 || tile.type === '0') continue;
+            if (tile.type === '5!') continue; // FIX: cassa presente = muro per A*, non superabile/spostabile
 
             // Vincolo direzionale: attivo solo su mappe direzionali
             // e solo se la tile corrente è una freccia
