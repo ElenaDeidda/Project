@@ -132,6 +132,8 @@ function pushNext() {
     const coord = beliefs.coord;
     if (coord?.frozen)   { agent.stop(); return; }
     if (coord?.override) { agent.push(coord.override); return; }
+    // Postino dedicato: in attesa di un handover NON gioca da BDI per conto suo.
+    if (coord?.role === 'postman') { agent.stop(); return; }
     const predicate = relayInterceptDeliver(deliberate(generateOptions()));
     agent.push(predicate);
 }
