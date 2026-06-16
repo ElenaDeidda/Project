@@ -270,6 +270,18 @@ function buildExecutionPlan(planSteps) {
 
 export async function execCratePlan(beliefs, socket, targetX, targetY, shouldStop = () => false) {
 
+    // FIX: prova prima A* diretto — il solver PDDL serve solo se il percorso
+    // è bloccato da una cassa (A* ora la riconosce come muro, vedi moves.js)
+    const direct = await navigateTo(
+        beliefs.me, { x: targetX, y: targetY }, socket, beliefs.mapTiles, shouldStop, ASTAR_RETRY,
+    );
+    if (direct === 'stopped') return false;
+    if (direct === 'reached') {
+        console.log(`[PDDL_CREATES] ✅ Arrivato a (${targetX},${targetY}) via A* diretto — PDDL non necessario`);
+        return true;
+    }
+    console.log(`[PDDL_CREATES] A* diretto bloccato verso (${targetX},${targetY}) — richiedo piano PDDL`);
+
     /** Primo piano PDDL */
     let rawPlan = null;
     try {
