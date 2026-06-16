@@ -125,7 +125,7 @@ function buildDeliverooProblem(me, mapTiles, parcels, goalParcelId, enemyAgents 
         'deliveroo-problem',
         bs.objects.join(' '),
         bs.toPddlString(),
-        `(delivered ${pid})`
+        `delivered ${pid}`
     );
 }
 
@@ -155,10 +155,19 @@ export async function getPddlPlan(me, mapTiles, parcels, goalParcelId, enemyAgen
         return null;
     }
 
+    // PddlDomain.toPddlString() dichiara solo (:requirements :strips), ma il
+    // dominio usa (not ...) nelle precondizioni (move/obstacle) → richiede
+    // :negative-preconditions, altrimenti il parser FF fallisce con un
+    // criptico "syntax error ... 'define' expected".
+    const domainStr = domain.toPddlString().replace(
+        '(:requirements :strips)',
+        '(:requirements :strips :negative-preconditions)'
+    );
+
     let rawPlan;
     try {
         rawPlan = await Promise.race([
-            onlineSolver(domain.toPddlString(), problem.toPddlString()),
+            onlineSolver(domainStr, problem.toPddlString()),
             new Promise((_, reject) =>
                 setTimeout(() => reject(new Error(`timeout ${PDDL_TIMEOUT_MS}ms`)), PDDL_TIMEOUT_MS)
             ),
