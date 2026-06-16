@@ -22,25 +22,31 @@ const _handlers    = new Map();       // type -> [callback]
 const _teammates   = new Set();       // id degli alleati confermati
 const _pendingAsks = new Map();       // askId -> resolve()
 
-// Allowlist di NOMI di compagni (env TEAM_NAMES="elena,lara"), letta a runtime in
-// initComms. Serve quando i due agenti hanno teamId DIVERSI (token di team diversi):
-// in quel caso il compagno viene riconosciuto per NOME invece che per teamId.
+// Override MANUALE opzionale: allowlist di nomi via env TEAM_NAMES="elena,lara".
+// Di norma NON serve: il compagno si riconosce da solo via teamName (vedi
+// isFromTeammate). Resta come ripiego se i teamName non combaciano.
 let _allowedNames = new Set();
 
-// teamId corrente - letto dinamicamente per evitare snapshot stantii nei messaggi
-function teamId() {
-    return _beliefs?.me?.teamId || '';
-}
+// teamId / teamName correnti - letti dinamicamente (popolati dal server in onYou)
+function teamId()   { return _beliefs?.me?.teamId   || ''; }
+function teamName() { return _beliefs?.me?.teamName || ''; }
 
-// E un messaggio di un mio compagno? Accetta se coincide il teamId OPPURE se il
-// nome del mittente e nell'allowlist TEAM_NAMES (e non sono io stesso).
+// Busta standard di OGNI messaggio: porta sempre teamId E teamName, cosi il
+// destinatario puo' riconoscere il compagno automaticamente via teamName.
+function envelope(fields) { return { teamId: teamId(), teamName: teamName(), ...fields }; }
+
+// E un messaggio di un mio compagno? Riconoscimento AUTOMATICO via teamName:
+// se il teamName nel messaggio e uguale al mio, e' un compagno (anche se il
+// teamId - legato al token - e diverso). Fallback: stesso teamId, oppure nome
+// del mittente in TEAM_NAMES (override manuale opzionale via .env).
 function isFromTeammate(senderName, msg) {
     if (!msg || typeof msg !== 'object') return false;
-    const myTeam = teamId();
-    if (myTeam && msg.teamId === myTeam) return true;            // stessa squadra
-    const sn = String(senderName || '').toLowerCase();
-    const my = String(_beliefs?.me?.name || '').toLowerCase();
-    return _allowedNames.size > 0 && sn !== my && _allowedNames.has(sn); // stesso nome-team
+    const myName = String(_beliefs?.me?.name || '').toLowerCase();
+    const sn     = String(senderName || '').toLowerCase();
+    if (sn && sn === myName) return false;                       // non sono io stesso
+    if (teamName() && msg.teamName === teamName()) return true;  // stesso teamName (auto)
+    if (teamId()   && msg.teamId   === teamId())   return true;  // stesso teamId
+    return _allowedNames.size > 0 && _allowedNames.has(sn);      // override .env opzionale
 }
 
 
@@ -67,10 +73,11 @@ export function initComms(socket, beliefs) {
         // vede SE e COSA arriva - anche quelli scartati.
         if (msg && typeof msg === 'object' && msg.type) {
             if (mine) {
-                const how = (teamId() && msg.teamId === teamId()) ? 'team' : 'nome';
+                const how = (teamName() && msg.teamName === teamName()) ? 'teamName'
+                          : (teamId() && msg.teamId === teamId()) ? 'teamId' : 'nome';
                 dbg(`OK ricevuto '${msg.type}' da ${name}(${id}) [match: ${how}]`);
             } else {
-                dbg(`X ricevuto '${msg.type}' da ${name}(${id}) team=${msg.teamId} (mio=${teamId() || '()'}) e nome non in TEAM_NAMES -> scartato`);
+                dbg(`X ricevuto '${msg.type}' da ${name}(${id}) teamName='${msg.teamName ?? ''}' (mio='${teamName()}') -> non e' un compagno, scartato`);
             }
         }
 
@@ -94,7 +101,7 @@ export function initComms(socket, beliefs) {
         if (msg.type === '__ask__' && typeof reply === 'function') {
             const handler = _handlers.get(msg.innerType)?.[0];
             const answer  = handler ? handler(msg.payload, id) : null;
-            reply({ teamId: teamId(), type: '__reply__', askId: msg.askId, payload: answer });
+            reply(envelope({ type: '__reply__', askId: msg.askId, payload: answer }));
             return;
         }
 
@@ -103,10 +110,10 @@ export function initComms(socket, beliefs) {
         for (const cb of cbs) cb(msg.payload, id);
     });
 
-    // Handshake iniziale: annuncio la mia presenza al team
-    socket.emitShout({ teamId: teamId(), type: 'hello', payload: { role: MY_ROLE } });
-    const names = _allowedNames.size ? [..._allowedNames].join(',') : '(nessuno -> solo teamId)';
-    dbg(`inizializzato - team=${teamId() || '??'} role=${MY_ROLE} | TEAM_NAMES=${names} -> inviato 'hello'`);
+    // Handshake iniziale: shout di 'hello' col mio teamName, cosi chi ha lo stesso
+    // teamName mi riconosce come compagno e mi salva (poi si parla in privato).
+    socket.emitShout(envelope({ type: 'hello', payload: { role: MY_ROLE, teamName: teamName() } }));
+    dbg(`inizializzato - teamName='${teamName()}' teamId=${teamId() || '??'} role=${MY_ROLE} -> shout 'hello'`);
 }
 
 
@@ -136,18 +143,18 @@ export function broadcast(type, payload) {
     const mates = [..._teammates];
     if (mates.length === 0) {
         dbg(`-> shout '${type}' (nessun alleato noto ancora: fallback visibile)`);
-        _socket.emitShout({ teamId: teamId(), type, payload });
+        _socket.emitShout(envelope({ type, payload }));
         return;
     }
     dbg(`-> '${type}' privato a ${mates.length} alleato/i`);
-    for (const id of mates) _socket.emitSay(id, { teamId: teamId(), type, payload });
+    for (const id of mates) _socket.emitSay(id, envelope({ type, payload }));
 }
 
 /** Manda a un alleato specifico */
 export function sendTo(teammateId, type, payload) {
     if (!_socket) { dbg(`[WARN] sendTo '${type}' ignorato: socket non inizializzato`); return; }
     dbg(`-> sendTo ${teammateId} '${type}'`);
-    _socket.emitSay(teammateId, { teamId: teamId(), type, payload });
+    _socket.emitSay(teammateId, envelope({ type, payload }));
 }
 
 /**
@@ -159,9 +166,7 @@ export function askTeammate(teammateId, type, payload, timeoutMs = 2000) {
         if (!_socket) return resolve(null);
         const askId = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
         _pendingAsks.set(askId, resolve);
-        _socket.emitSay(teammateId, {
-            teamId: teamId(), type: '__ask__', innerType: type, askId, payload,
-        });
+        _socket.emitSay(teammateId, envelope({ type: '__ask__', innerType: type, askId, payload }));
         setTimeout(() => {
             if (_pendingAsks.has(askId)) { _pendingAsks.delete(askId); resolve(null); }
         }, timeoutMs);
