@@ -1,5 +1,6 @@
 // beliefs.js — Stato del mondo e funzioni di aggiornamento
 import { smartDist, parseIntervalMs } from './basic_functions.js';
+import { computeDeadSquares } from './pddl_crates.js';
 
 export const beliefs = {
     me:             { id: '', name: '', teamId: '', teamName: '', x: 0, y: 0, score: 0 },
@@ -17,6 +18,12 @@ export const beliefs = {
     // Precalcolato in updateMap():
     // per ogni spawn tile "x_y" → quante spawn tiles sono visibili da quel punto
     spawnVisibility: new Map(),
+
+    // Precalcolato in updateMap() (solo mappe con casse): crate-slot tile
+    // statiche in cui spingere una cassa creerebbe un deadlock permanente,
+    // indipendentemente dal target. Usato da pddl_crates.js::buildProblem
+    // per escluderle dal problem PDDL e ridurre lo spazio di ricerca.
+    deadSquares: new Set(),
 
     // "x_y" → target per cui il solver PDDL ha confermato che non esiste
     // nessun piano (mappa con casse) — esclusi in modo permanente dalle opzioni.
@@ -57,7 +64,15 @@ export function updateMap(width, height, tiles) {
 
     }
 
-    // --- 2. Precalcola spawnVisibility ---
+    // --- 2. Precalcola le dead square (solo mappe con casse) ---
+    // Calcolo statico (geometria mappa), va fatto una sola volta qui, non
+    // ad ogni chiamata al solver PDDL.
+    if (beliefs.isCrateMap) {
+        beliefs.deadSquares = computeDeadSquares(beliefs.mapTiles);
+        console.log(`[BELIEFS] dead squares precalcolate: ${beliefs.deadSquares.size}`);
+    }
+
+    // --- 3. Precalcola spawnVisibility ---
     const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
 
     for (const [key, tile] of beliefs.mapTiles.entries()) {

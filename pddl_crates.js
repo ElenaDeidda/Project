@@ -4,19 +4,23 @@
 // Struttura ispirata al pattern lab5 (4domain.js):
 //   1. buildDomain()        → stringa PDDL fissa del dominio
 //   2. buildProblem()       → stringa PDDL generata dai beliefs correnti
+//      (pre-processing: omette le crate-slot morte/freeze, vedi sezione 0)
 //   3. callSolver()         → chiama onlineSolver con timeout
 //   4. buildExecutionPlan() → separa push da segmenti move puri (→ A*)
-//   5. execCratePlan()      → executor: push con emitMove, move con A*;
-//                             se A* fallisce → ricalcola con il solver
+//   5. execCratePlan()      → executor: chiama subito il PDDL; A* è solo
+//                             fallback di emergenza se il solver non trova
+//                             un piano. Push con emitMove, move con A*.
 //
-// Unico export pubblico: execCratePlan() — usato da plans_crate.js
+// Export pubblici: execCratePlan() (usato da plans_crate.js) e
+// computeDeadSquares() (usato da beliefs.js per precalcolare beliefs.deadSquares
+// una sola volta al caricamento mappa).
 // Import dalla libreria: solo onlineSolver
 
 import { onlineSolver } from '@unitn-asa/pddl-client';
 import { navigateTo }                  from './moves.js';
 
-const PDDL_TIMEOUT_MS = 5000;
-const ASTAR_RETRY     = 3;      // tentativi A* prima di tornare al solver
+const PDDL_TIMEOUT_MS = 20000;  // rete di sicurezza generosa, non una scadenza "normale"
+const ASTAR_RETRY     = 3;      // tentativi A* (solo fallback di emergenza, vedi execCratePlan)
 
 // Cache piani: chiave = target + stato attuale delle casse. Evita di
 // richiamare il solver remoto per la stessa identica configurazione.
@@ -46,6 +50,96 @@ function directionBetween(from, to) {
     if (to.y > from.y) return 'up';
     if (to.y < from.y) return 'down';
     return null;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 0. PRE-PROCESSING DEADLOCK — riduce lo spazio di ricerca del solver
+//    omettendo dal problem le crate-slot in cui spingere una cassa sarebbe
+//    un deadlock permanente. Nessuna modifica al dominio: si riusa la
+//    precondizione (crate-slot ?behind) già esistente sulle push — se il
+//    fatto non viene dichiarato, tutte le push verso quella tile diventano
+//    semplicemente irrealizzabili.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DIRECTIONS = [{ dx: 1, dy: 0 }, { dx: -1, dy: 0 }, { dx: 0, dy: 1 }, { dx: 0, dy: -1 }];
+
+function isWall(mapTiles, x, y) {
+    const t = mapTiles.get(`${x}_${y}`);
+    return !t || t.type === '0';
+}
+
+function isCrateSlot(mapTiles, x, y) {
+    const t = mapTiles.get(`${x}_${y}`);
+    return !!t && (t.type === '5' || t.type === '5!');
+}
+
+/**
+ * Calcolo STATICO (solo geometria: muri + crate-slot, indipendente da dove
+ * sono casse/agente in questo istante) → da chiamare una sola volta al
+ * caricamento mappa (vedi beliefs.js::updateMap), non ad ogni chiamata al
+ * solver.
+ *
+ * Punto fisso sull'universo delle crate-slot: una tile è "viva" se esiste
+ * almeno una direzione di push-fuori strutturalmente possibile (l'agente può
+ * stare sul lato opposto E la destinazione è anch'essa una crate-slot) verso
+ * un'altra tile ancora viva. Tutto ciò che non resta vivo a convergenza è
+ * "dead square" — spingere una cassa lì la blocca per sempre, qualunque
+ * target si stia cercando di raggiungere.
+ */
+export function computeDeadSquares(mapTiles) {
+    const slots = [];
+    for (const [key, tile] of mapTiles.entries()) {
+        if (tile.type === '5' || tile.type === '5!') slots.push(key);
+    }
+
+    const alive = new Set(slots);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const key of alive) {
+            const [x, y] = key.split('_').map(Number);
+            const hasEscape = DIRECTIONS.some(({ dx, dy }) => {
+                const behindOk = !isWall(mapTiles, x - dx, y - dy);   // tile dove sta l'agente
+                const destKey  = `${x + dx}_${y + dy}`;
+                return behindOk && isCrateSlot(mapTiles, x + dx, y + dy) && alive.has(destKey);
+            });
+            if (!hasEscape) {
+                alive.delete(key);
+                changed = true;
+            }
+        }
+    }
+
+    const dead = new Set(slots.filter(k => !alive.has(k)));
+    return dead;
+}
+
+/**
+ * Calcolo DINAMICO (dipende dalla configurazione attuale delle altre casse)
+ * → va richiamato ad ogni buildProblem(), mai cachato. Verifica se una cassa
+ * IPOTETICAMENTE posizionata in cratePos sarebbe "frozen": bloccata sia
+ * sull'asse orizzontale che su quello verticale da muri o da altre casse a
+ * loro volta frozen. Una cassa frozen, su questa mappa, non ha mai un motivo
+ * per essere "ok" (le casse non hanno una tile-obiettivo propria): è sempre
+ * un esito da evitare. Copre i casi comuni di blocco mutuo a 2-3 casse;
+ * non è una garanzia completa su configurazioni arbitrariamente complesse.
+ */
+export function computeFreezeDeadlock(cratePos, mapTiles, crateTiles, visited = new Set()) {
+    const key = `${cratePos.x}_${cratePos.y}`;
+    if (visited.has(key)) return true;   // ricorsione su un ciclo di casse → conservativo: bloccata
+    visited.add(key);
+
+    const isWallOrFrozenCrate = (x, y) => {
+        if (isWall(mapTiles, x, y)) return true;
+        const k = `${x}_${y}`;
+        if (crateTiles.has(k)) return computeFreezeDeadlock({ x, y }, mapTiles, crateTiles, visited);
+        return false;
+    };
+
+    const blockedH = isWallOrFrozenCrate(cratePos.x + 1, cratePos.y) && isWallOrFrozenCrate(cratePos.x - 1, cratePos.y);
+    const blockedV = isWallOrFrozenCrate(cratePos.x, cratePos.y + 1) && isWallOrFrozenCrate(cratePos.x, cratePos.y - 1);
+    return blockedH && blockedV;
 }
 
 
@@ -149,13 +243,27 @@ function buildProblem(beliefs, targetX, targetY) {
         }
     }
 
-    /** Slot cassa: tile valide come destinazione di push ('5' e '5!') */
+    /** Slot cassa: tile valide come destinazione di push ('5' e '5!'),
+     *  escluse le dead square statiche e le tile in cui una cassa
+     *  spinta lì risulterebbe frozen — riduce lo spazio di ricerca del
+     *  solver senza toccare il dominio (vedi sezione 0). */
+    let excludedSlots = 0;
     for (const [key, tile] of beliefs.mapTiles.entries()) {
         if (tile.type !== '5' && tile.type !== '5!') continue;
         const [x, y] = key.split('_').map(Number);
         const tid = tileId(x, y);
         objects.add(tid);
+
+        if (beliefs.deadSquares?.has(key)) { excludedSlots++; continue; }
+        if (!beliefs.crateTiles.has(key) &&
+            computeFreezeDeadlock({ x, y }, beliefs.mapTiles, beliefs.crateTiles)) {
+            excludedSlots++; continue;
+        }
+
         facts.push(`(crate-slot ${tid})`);
+    }
+    if (excludedSlots > 0) {
+        console.log(`[PDDL_CREATES] ${excludedSlots} crate-slot escluse dal problem (dead/freeze)`);
     }
 
     const targetTile = tileId(targetX, targetY);
@@ -285,28 +393,26 @@ function buildExecutionPlan(planSteps) {
 
 export async function execCratePlan(beliefs, socket, targetX, targetY, shouldStop = () => false) {
 
-    // FIX: prova prima A* diretto — il solver PDDL serve solo se il percorso
-    // è bloccato da una cassa (A* ora la riconosce come muro, vedi moves.js)
-    const direct = await navigateTo(
-        beliefs.me, { x: targetX, y: targetY }, socket, beliefs.mapTiles, shouldStop, ASTAR_RETRY,
-    );
-    if (direct === 'stopped') return false;
-    if (direct === 'reached') {
-        console.log(`[PDDL_CREATES] ✅ Arrivato a (${targetX},${targetY}) via A* diretto — PDDL non necessario`);
-        return true;
-    }
-    console.log(`[PDDL_CREATES] A* diretto bloccato verso (${targetX},${targetY}) — richiedo piano PDDL`);
-
-    /** Primo piano PDDL */
+    // Il PDDL è la fonte primaria su mappe con casse: A* non sa spingere,
+    // quindi tentarlo prima sprecherebbe mosse/tempo (reward che decadono)
+    // ogni volta che il percorso diretto è bloccato da una cassa. Il PDDL
+    // viene chiamato subito; A* resta solo come fallback di emergenza se
+    // il solver non trova alcun piano (vedi sotto).
     let rawPlan = null;
     try {
         rawPlan = await callSolver(beliefs, targetX, targetY);
     } catch (err) {
         console.warn('[PDDL_CREATES] Solver fallito:', err.message);
-        return false;
     }
 
-    if (!rawPlan) return false;
+    if (!rawPlan) {
+        console.warn('[CRATE] PDDL fallito — fallback A* di emergenza');
+        const fallback = await navigateTo(
+            beliefs.me, { x: targetX, y: targetY }, socket, beliefs.mapTiles, shouldStop, ASTAR_RETRY,
+        );
+        if (fallback === 'reached') return true;
+        return false;
+    }
 
     let executionPlan = buildExecutionPlan(rawPlan);
     let stepIndex     = 0;
