@@ -333,21 +333,13 @@ export function nearestRowTile(parity = 'odd') {
 }
 
 /**
- * Tile di handover: tra le tile raggiungibili da ME, quella piu vicina al punto
- * medio fra me e la delivery (cosi il postino fa il tragitto residuo). Riusa il
- * BFS per garantire che sia effettivamente raggiungibile.
+ * Tile di handover = la posizione ATTUALE del raccoglitore.
+ * E' la scelta a prova di deadlock: il raccoglitore ci sta gia' sopra (quindi la
+ * "raggiunge" all'istante, niente viaggio durante il quale il postino potrebbe
+ * occuparla) e due agenti non possono stare sulla stessa tile, quindi NON puo'
+ * mai coincidere con la posizione del postino. Il postino fa il tragitto verso
+ * di lui. (`delivery` non serve piu' ma lo teniamo per compatibilita').
  */
 export function handoverTile(me, delivery) {
-    const midX = (me.x + delivery.x) / 2;
-    const midY = (me.y + delivery.y) / 2;
-    const dist = reachMap();
-    let best = null, bestM = Infinity;
-    for (const [key] of dist) {
-        const [x, y] = key.split('_').map(Number);
-        // evita di scegliere proprio la delivery (vogliamo che consegni il postino)
-        if (x === Math.round(delivery.x) && y === Math.round(delivery.y)) continue;
-        const m = Math.abs(x - midX) + Math.abs(y - midY);
-        if (m < bestM) { bestM = m; best = { x, y }; }
-    }
-    return best;
+    return { x: Math.round(me.x), y: Math.round(me.y) };
 }
