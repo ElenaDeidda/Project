@@ -287,8 +287,13 @@ export function updateCrates(sensing) {
     if (beliefs.crateTiles.has(selfKey)) {
         beliefs.crateTiles.delete(selfKey);
         beliefs.mapTiles.set(selfKey, { type: '5' });
-        beliefs.unreachableCrateTargets.delete(selfKey); // FIX: allow retry after crate moved
-        console.log(`[BELIEFS] (${mx},${my}) liberata da cassa — rimossa da unreachableCrateTargets`);
+        // FIX: una cassa che si sposta può liberare il percorso verso QUALSIASI
+        // target prima escluso, non solo verso la propria vecchia posizione —
+        // resettiamo tutta l'esclusione invece della sola chiave selfKey.
+        if (beliefs.unreachableCrateTargets.size > 0) {
+            console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+            beliefs.unreachableCrateTargets.clear();
+        }
         console.log(`[BELIEFS] cassa rimossa da (${mx},${my}) — l'agente è su quella cella`);
     }
 
@@ -309,8 +314,10 @@ export function updateCrates(sensing) {
             if (weThinkHasCrate && !serverHasCrate) {
                 beliefs.crateTiles.delete(key);
                 beliefs.mapTiles.set(key, { type: '5' });
-                beliefs.unreachableCrateTargets.delete(key); // FIX: allow retry after crate moved
-                console.log(`[BELIEFS] (${x},${y}) liberata da cassa — rimossa da unreachableCrateTargets`);
+                if (beliefs.unreachableCrateTargets.size > 0) {
+                    console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+                    beliefs.unreachableCrateTargets.clear();
+                }
                 console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — riconciliazione server`);
             }
             if (!weThinkHasCrate && serverHasCrate) {
@@ -338,8 +345,10 @@ export function updateCrates(sensing) {
         if (walkableVisible.has(key)) {
             beliefs.crateTiles.delete(key);
             beliefs.mapTiles.set(key, { type: '5' });
-            beliefs.unreachableCrateTargets.delete(key); // FIX: allow retry after crate moved
-            console.log(`[BELIEFS] (${x},${y}) liberata da cassa — rimossa da unreachableCrateTargets`);
+            if (beliefs.unreachableCrateTargets.size > 0) {
+                console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+                beliefs.unreachableCrateTargets.clear();
+            }
             console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — tile ora walkable (fallback positions)`);
         }
     }

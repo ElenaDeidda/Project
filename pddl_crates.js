@@ -18,6 +18,14 @@ import { navigateTo }                  from './moves.js';
 const PDDL_TIMEOUT_MS = 5000;
 const ASTAR_RETRY     = 3;      // tentativi A* prima di tornare al solver
 
+// Cache piani: chiave = target + stato attuale delle casse. Evita di
+// richiamare il solver remoto per la stessa identica configurazione.
+const planCache = new Map();   // "tx_ty|crateState" → rawPlan
+
+function crateStateHash(beliefs) {
+    return [...beliefs.crateTiles.keys()].sort().join(',');
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. HELPERS
@@ -169,6 +177,12 @@ function buildProblem(beliefs, targetX, targetY) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function callSolver(beliefs, targetX, targetY) {
+    const cacheKey = `${Math.round(targetX)}_${Math.round(targetY)}|${crateStateHash(beliefs)}`;
+    if (planCache.has(cacheKey)) {
+        console.log(`[PDDL_CREATES] piano da cache per (${targetX},${targetY}) — solver non chiamato`);
+        return planCache.get(cacheKey);
+    }
+
     const domain  = buildDomain();
     const problem = buildProblem(beliefs, targetX, targetY);
 
@@ -189,6 +203,7 @@ async function callSolver(beliefs, targetX, targetY) {
     }
 
     console.log(`[PDDL_CREATES] Piano trovato: ${rawPlan.length} passi`);
+    planCache.set(cacheKey, rawPlan);
     return rawPlan;
 }
 
