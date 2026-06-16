@@ -287,6 +287,8 @@ export function updateCrates(sensing) {
     if (beliefs.crateTiles.has(selfKey)) {
         beliefs.crateTiles.delete(selfKey);
         beliefs.mapTiles.set(selfKey, { type: '5' });
+        beliefs.unreachableCrateTargets.delete(selfKey); // FIX: allow retry after crate moved
+        console.log(`[BELIEFS] (${mx},${my}) liberata da cassa — rimossa da unreachableCrateTargets`);
         console.log(`[BELIEFS] cassa rimossa da (${mx},${my}) — l'agente è su quella cella`);
     }
 
@@ -307,6 +309,8 @@ export function updateCrates(sensing) {
             if (weThinkHasCrate && !serverHasCrate) {
                 beliefs.crateTiles.delete(key);
                 beliefs.mapTiles.set(key, { type: '5' });
+                beliefs.unreachableCrateTargets.delete(key); // FIX: allow retry after crate moved
+                console.log(`[BELIEFS] (${x},${y}) liberata da cassa — rimossa da unreachableCrateTargets`);
                 console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — riconciliazione server`);
             }
             if (!weThinkHasCrate && serverHasCrate) {
@@ -334,6 +338,8 @@ export function updateCrates(sensing) {
         if (walkableVisible.has(key)) {
             beliefs.crateTiles.delete(key);
             beliefs.mapTiles.set(key, { type: '5' });
+            beliefs.unreachableCrateTargets.delete(key); // FIX: allow retry after crate moved
+            console.log(`[BELIEFS] (${x},${y}) liberata da cassa — rimossa da unreachableCrateTargets`);
             console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — tile ora walkable (fallback positions)`);
         }
     }
