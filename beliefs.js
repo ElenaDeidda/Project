@@ -264,6 +264,17 @@ export function updateCrates(sensing) {
     const mx = Math.round(me.x);
     const my = Math.round(me.y);
 
+    // Correzione immediata: l'agente non può fisicamente stare su una cella
+    // con una cassa. Se crateTiles la marca occupata è uno stato stale
+    // (es. un altro agente l'ha spostata) — rimuovila subito, non solo
+    // a livello di generazione del problema PDDL.
+    const selfKey = `${mx}_${my}`;
+    if (beliefs.crateTiles.has(selfKey)) {
+        beliefs.crateTiles.delete(selfKey);
+        beliefs.mapTiles.set(selfKey, { type: '5' });
+        console.log(`[BELIEFS] cassa rimossa da (${mx},${my}) — l'agente è su quella cella`);
+    }
+
     // --- Strategia A: il server manda sensing.crates ---
     if (sensing.crates && sensing.crates.length > 0) {
         const serverCrateKeys = new Set(
