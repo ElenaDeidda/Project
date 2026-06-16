@@ -185,7 +185,7 @@ async function callSolver(beliefs, targetX, targetY) {
     ]);
 
     if (!rawPlan || rawPlan.length === 0) {
-        console.warn('[PDDL_CREATES] Nessun piano trovato');
+        console.error(`[PDDL_CREATES] NESSUN PIANO TROVATO verso (${targetX},${targetY}) — esecuzione bloccata`);
         return null;
     }
 
