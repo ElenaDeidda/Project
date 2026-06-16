@@ -91,7 +91,7 @@ export function formatMap(beliefs) {
             case '3':  return '·';   // calpestabile
             case '4':  return 'B';   // base
             case '5':
-            case '5!': return '▒';   // crate
+            case '5!': return '[]';   // crate
             default:   return ARROWS.has(type) ? type : '?';
         }
     };
