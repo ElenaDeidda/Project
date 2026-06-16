@@ -413,6 +413,17 @@ export function generateOptions() {
     // C'è almeno un pacco raccoglibile visibile → la zona non è "vuota"
     if (pickups.length > 0) lastPickupSeenTime = Date.now();
 
+    // FIX: BUG 3 — su mappa con casse, se non c'è alcun pacco visibile, evita
+    // di mischiare un array di pickup vuoto con le spawn: il pathing verso le
+    // casse è costoso (PDDL), quindi conviene un percorso strutturalmente
+    // separato che generi/valuti SOLO le spawn, senza dipendere da un
+    // concat che in questo caso sarebbe comunque equivalente alle sole spawn.
+    if (beliefs.isCrateMap && pickups.length === 0) {
+        const spawnOnly = buildSpawnOptions(agentPositions, dist);
+        checkGlobalDeadlock(spawnOnly);
+        return spawnOnly;
+    }
+
     const options = [
         ...pickups,
         ...buildSpawnOptions(agentPositions, dist),
@@ -426,8 +437,26 @@ export function generateOptions() {
 // per questa configurazione non esiste alcun piano possibile → blocca tutto.
 function checkGlobalDeadlock(options) {
     if (!beliefs.isCrateMap) return;
-    if (options.length > 0) return;
-    if (beliefs.unreachableCrateTargets.size === 0) return;
+
+    // Condizione 1 (originale): nessuna opzione percorribile e almeno un
+    // target è già stato escluso dal solver PDDL.
+    const noOptionsLeft = options.length === 0 && beliefs.unreachableCrateTargets.size > 0;
+
+    // FIX: BUG 2 — condizione 2 (nuova, indipendente, in OR con la prima):
+    // anche se options non è ancora vuoto, se TUTTE le spawn tile note E
+    // TUTTI i delivery point noti sono già stati esclusi dal solver PDDL,
+    // non esiste comunque alcun piano possibile su questa mappa → halt
+    // senza aspettare che anche le altre opzioni vengano testate una per una.
+    const spawnKeys = [...beliefs.mapTiles.entries()]
+        .filter(([, tile]) => tile.type === '1')
+        .map(([key]) => key);
+    const deliveryKeys = beliefs.deliveryPoints
+        .map(dp => `${Math.round(dp.x)}_${Math.round(dp.y)}`);
+    const allKnownTargets = [...spawnKeys, ...deliveryKeys];
+    const allKnownTargetsUnreachable = allKnownTargets.length > 0 &&
+        allKnownTargets.every(key => beliefs.unreachableCrateTargets.has(key));
+
+    if (!noOptionsLeft && !allKnownTargetsUnreachable) return;
 
     haltAgent(`nessun piano possibile per nessun target raggiungibile su questa mappa (target esclusi: ${[...beliefs.unreachableCrateTargets].join(', ')})`);
 }
