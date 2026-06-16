@@ -183,7 +183,8 @@ async function callSolver(beliefs, targetX, targetY) {
     ]);
 
     if (!rawPlan || rawPlan.length === 0) {
-        console.error(`[PDDL_CREATES] NESSUN PIANO TROVATO verso (${targetX},${targetY}) — esecuzione bloccata`);
+        console.error(`[PDDL_CREATES] NESSUN PIANO TROVATO verso (${targetX},${targetY}) — target escluso permanentemente`);
+        beliefs.unreachableCrateTargets.add(`${Math.round(targetX)}_${Math.round(targetY)}`);
         return null;
     }
 
