@@ -6,7 +6,6 @@
 
 import { beliefs }    from './beliefs.js';
 import { navigateTo } from './moves.js';
-import { getPddlPlan, planToMoves } from './pddl_planner.js';
 import { planLibraryCrate } from './plans_crate.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22,13 +21,13 @@ class PlanBase {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GoPickUp — raccolta pacco su mappa normale (A* con fallback PDDL opzionale)
+// GoPickUp — raccolta pacco su mappa normale (sempre A*)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class GoPickUp extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
-    static isApplicableTo(action) { return action === 'go_pick_up'; }
+    static isApplicableTo(action) { return action === 'go_pick_up' && !beliefs.isCrateMap; }
 
     async execute(_action, x, y, id) {
         if (this.stopped) throw ['stopped'];
@@ -36,51 +35,6 @@ export class GoPickUp extends PlanBase {
         const parcel = beliefs.parcels.get(id);
         if (!parcel || parcel.carriedBy) throw [`Pacco ${id} non disponibile`];
 
-        // ── Tentativo PDDL (se abilitato) ───────────────────────────────────
-        const enemies  = beliefs.agents ? [...beliefs.agents.values()] : [];
-        const rawPlan  = await getPddlPlan(beliefs.me, beliefs.mapTiles, beliefs.parcels, id, enemies);
-
-        if (rawPlan) {
-            console.log(`[PLANS] GoPickUp PDDL → (${x},${y})`);
-            const moves = planToMoves(rawPlan);
-            let pddlOk  = true;
-
-            for (const move of moves) {
-                if (this.stopped) throw ['stopped'];
-
-                if (move === 'pickup') {
-                    const picked = await this.#socket.emitPickup();
-                    if (picked?.length > 0) {
-                        beliefs.carrying       = true;
-                        beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
-                    }
-                } else if (move === 'putdown') {
-                    await this.#socket.emitPutdown();
-                } else {
-                    const result = await this.#socket.emitMove(move);
-                    if (result?.x != null) {
-                        beliefs.me.x = result.x;
-                        beliefs.me.y = result.y;
-                    } else {
-                        pddlOk = false;
-                        break;
-                    }
-                }
-            }
-
-            if (pddlOk) {
-                if (beliefs.carriedParcels.some(p => p.id === id)) return true;
-                const picked = await this.#socket.emitPickup();
-                if (picked?.length > 0) {
-                    beliefs.carrying       = true;
-                    beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
-                    return true;
-                }
-            }
-            // Piano PDDL interrotto → fallback A*
-        }
-
-        // ── Fallback A* ──────────────────────────────────────────────────────
         console.log(`[PLANS] GoPickUp A* → (${x},${y})`);
         const nav = await navigateTo(beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
@@ -108,7 +62,7 @@ export class GoPickUp extends PlanBase {
 export class Deliver extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
-    static isApplicableTo(action) { return action === 'deliver'; }
+    static isApplicableTo(action) { return action === 'deliver' && !beliefs.isCrateMap; }
 
     async execute(_action, x, y) {
         if (this.stopped) throw ['stopped'];
@@ -149,7 +103,7 @@ export class Deliver extends PlanBase {
 export class GoToSpawn extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
-    static isApplicableTo(action) { return action === 'go_to_spawn'; }
+    static isApplicableTo(action) { return action === 'go_to_spawn' && !beliefs.isCrateMap; }
 
     async execute(_action, x, y) {
         if (this.stopped) throw ['stopped'];
