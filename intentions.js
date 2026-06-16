@@ -1,4 +1,4 @@
-// intentions.js — IntentionRevision e IntentionDeliberation.
+// intentions.js - IntentionRevision e IntentionDeliberation.
 // Il socket viene passato nel costruttore e inoltrato ai piani.
 
 import { planLibrary } from './plans.js';
@@ -29,7 +29,7 @@ export class IntentionRevision {
         this.#chain = this.#chain.then(async () => {
             if (this.#current !== intention) return;
 
-            // console.log(`[INTENTIONS] → ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
+            // console.log(`[INTENTIONS] -> ${predicate[0]}(${predicate.slice(1,3).join(',')})`);
             try {
                 await intention.achieve();
             } catch (err) {

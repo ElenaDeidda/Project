@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 
 // Cerca .env.llm specifico per l'LLM, altrimenti usa .env condiviso.
-// Va caricato PRIMA degli altri import perché llm_agent.js legge process.env
+// Va caricato PRIMA degli altri import perche llm_agent.js legge process.env
 // (LITELLM_API_KEY, LOCAL_MODEL, LLM_TEMP) al momento dell'import.
 const envFile = fs.existsSync('.env.llm') ? '.env.llm' : '.env';
 dotenv.config({ path: envFile, override: true });
@@ -12,10 +12,10 @@ console.log(`[LLM] env caricato da ${envFile}`);
 // I moduli condivisi (plans.js, options.js, intentions.js, ...) loggano con tag
 // come [PLANS] [PATROL] [OPTIONS] [INTENTIONS] [BDI-LLM] [RULES] [HEARTBEAT].
 // Per studiare SOLO il comportamento dell'LLM li filtriamo qui a runtime, senza
-// toccare quei file (così main.js resta invariato). Sono SILENZIATI di default;
+// toccare quei file (cosi main.js resta invariato). Sono SILENZIATI di default;
 // personalizza la lista con la env LLM_LOG_MUTE:
-//   LLM_LOG_MUTE=""               → rivedi tutto (nessun filtro)
-//   LLM_LOG_MUTE="PLANS,PATROL"   → silenzia solo quei due tag
+//   LLM_LOG_MUTE=""               -> rivedi tutto (nessun filtro)
+//   LLM_LOG_MUTE="PLANS,PATROL"   -> silenzia solo quei due tag
 const MUTED_LOG_TAGS = (process.env.LLM_LOG_MUTE
         ?? 'PLANS,PATROL,OPTIONS,INTENTIONS,BDI-LLM,RULES,HEARTBEAT')
     .split(',').map(s => s.trim()).filter(Boolean);
@@ -28,14 +28,14 @@ if (MUTED_LOG_TAGS.length) {
             orig(...args);
         };
     }
-    console.log(`[LLM] filtro log attivo — silenziati: ${MUTED_LOG_TAGS.join(', ')} (override con LLM_LOG_MUTE)`);
+    console.log(`[LLM] filtro log attivo - silenziati: ${MUTED_LOG_TAGS.join(', ')} (override con LLM_LOG_MUTE)`);
 }
 
 const { DjsConnect } = await import("@unitn-asa/deliveroo-js-sdk/client");
 const { startLlmAgent } = await import("./llm_agent.js");
 const { navigateTo } = await import("./moves.js");
 const { beliefs, updateConfig, updateMap, updateSensing, formatMap } = await import("./beliefs.js");
-// BDI machinery: lo stesso che usa main.js. Lo carichiamo anche qui perché
+// BDI machinery: lo stesso che usa main.js. Lo carichiamo anche qui perche
 // l'LLM agent deve giocare la partita normale (raccolta + consegna) quando
 // non sta eseguendo una special mission.
 const { generateOptions, deliberate } = await import("./options.js");
@@ -46,7 +46,7 @@ const { initCoordination, relayInterceptDeliver } = await import("./coordination
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
 
 // 2. Listener: config (per observation_distance ecc.), map (per pathfinding),
-//    you (identità + posizione), sensing (pacchi, nemici).
+//    you (identita + posizione), sensing (pacchi, nemici).
 socket.onConfig(c => updateConfig(c));
 
 // onMap arriva alla connessione e di nuovo a ogni RESTART della partita. Al
@@ -60,7 +60,7 @@ socket.onMap((w, h, t) => {
         const had = Object.keys(activeRules);
         for (const k of had) delete activeRules[k];
         if (beliefs.forbiddenTiles instanceof Map) beliefs.forbiddenTiles.clear();
-        if (had.length) console.log(`[LLM-MAIN] 🔄 Restart partita → regole azzerate (erano: ${had.join(', ')})`);
+        if (had.length) console.log(`[LLM-MAIN] [RESTART] Restart partita -> regole azzerate (erano: ${had.join(', ')})`);
     }
     _mapLoaded = true;
 });
@@ -76,7 +76,7 @@ socket.onYou(me => {
 
 // Loop BDI: ad ogni sensing rideliberiamo le options e pushiamo l'intenzione.
 // Stesso pattern di main.js, ma con un interruttore `bdiPaused` controllato
-// dall'LLM agent: quando una special mission è in esecuzione, il BDI tace
+// dall'LLM agent: quando una special mission e in esecuzione, il BDI tace
 // per non rubarle l'iniziativa.
 const agent = new IntentionRevision(socket);
 let bdiPaused = false;
@@ -85,22 +85,22 @@ function bdiPause()  {
     if (bdiPaused) return;
     bdiPaused = true;
     agent.stop();
-    console.log(`[LLM-MAIN] ⏸  BDI in pausa — mission in esecuzione`);
+    console.log(`[LLM-MAIN] [PAUSE]  BDI in pausa - mission in esecuzione`);
 }
 function bdiResume() {
     if (!bdiPaused) return;
     bdiPaused = false;
-    console.log(`[LLM-MAIN] ▶  BDI ripreso — torno a giocare normalmente`);
+    console.log(`[LLM-MAIN] >  BDI ripreso - torno a giocare normalmente`);
 }
 
 // Log "intelligente" della predicate corrente: stampa solo quando cambia,
-// così non spammiamo. Utile per vedere cosa sta facendo l'agente.
+// cosi non spammiamo. Utile per vedere cosa sta facendo l'agente.
 let _lastPredicate = null;
 function logPredicateIfChanged(predicate) {
     const key = JSON.stringify(predicate);
     if (key === _lastPredicate) return;
     _lastPredicate = key;
-    console.log(`[BDI-LLM] → ${predicate?.[0]}(${(predicate ?? []).slice(1).join(',')})`);
+    console.log(`[BDI-LLM] -> ${predicate?.[0]}(${(predicate ?? []).slice(1).join(',')})`);
 }
 
 // ─── L2: regole attive installate dall'LLM via set_rule() ─────────────────────
@@ -112,13 +112,13 @@ function logPredicateIfChanged(predicate) {
 //   - applyRulesToPredicate: modifica la predicate prima di pushare l'intention
 //     (es. stack_size, zero_delivery, bonus_delivery)
 const activeRules = {};
-// Esponiamo le regole nei beliefs così che moves.js (consegna automatica) e
+// Esponiamo le regole nei beliefs cosi che moves.js (consegna automatica) e
 // plans.js (piano Deliver) possano consegnare in stack di N. main.js non le
-// imposta → beliefs.activeRules resta undefined e il comportamento è quello
+// imposta -> beliefs.activeRules resta undefined e il comportamento e quello
 // normale (consegna tutto).
 beliefs.activeRules = activeRules;
 
-// Reprint coalescato della mappa quando cambiano le zone vietate (così non
+// Reprint coalescato della mappa quando cambiano le zone vietate (cosi non
 // stampiamo 6 mappe per 6 tile installate in fila).
 let _forbiddenReprintTimer = null;
 function scheduleForbiddenMapReprint() {
@@ -131,10 +131,10 @@ function scheduleForbiddenMapReprint() {
 
 function applyRulesToBeliefs() {
     // forbidden_tile: MURO VERO. Marchiamo la tile come type '0' direttamente in
-    // mapTiles: l'A* la salta SEMPRE — anche se fosse la destinazione (i muri non
-    // hanno l'eccezione "goal" che invece avevano i vecchi phantom). È persistente
+    // mapTiles: l'A* la salta SEMPRE - anche se fosse la destinazione (i muri non
+    // hanno l'eccezione "goal" che invece avevano i vecchi phantom). E persistente
     // (mapTiles non viene azzerata da updateSensing) e reversibile (clear_rule).
-    // beliefs.forbiddenTiles: "x_y" → tipo ORIGINALE (per il ripristino e per il
+    // beliefs.forbiddenTiles: "x_y" -> tipo ORIGINALE (per il ripristino e per il
     // disegno con 'X' sulla mappa).
     beliefs.forbiddenTiles ??= new Map();
     const want = new Set((activeRules.forbiddenTiles ?? []).map(t => `${t.x}_${t.y}`));
@@ -147,9 +147,9 @@ function applyRulesToBeliefs() {
             beliefs.forbiddenTiles.set(key, tile ? tile.type : '3');   // ricorda l'originale
             changed = true;
         }
-        if (tile && tile.type !== '0') tile.type = '0';                // → muro
+        if (tile && tile.type !== '0') tile.type = '0';                // -> muro
     }
-    // ripristina quelle non più vietate (es. clear_rule)
+    // ripristina quelle non piu vietate (es. clear_rule)
     for (const [key, origType] of beliefs.forbiddenTiles) {
         if (!want.has(key)) {
             const tile = beliefs.mapTiles.get(key);
@@ -160,7 +160,7 @@ function applyRulesToBeliefs() {
     }
     if (changed) scheduleForbiddenMapReprint();
 
-    // max_parcel_reward: rimuovi dai beliefs i pacchi troppo cari così
+    // max_parcel_reward: rimuovi dai beliefs i pacchi troppo cari cosi
     // options.js non li considera nemmeno candidati.
     if (typeof activeRules.maxParcelReward === 'number') {
         for (const [id, p] of beliefs.parcels) {
@@ -173,7 +173,7 @@ function applyRulesToBeliefs() {
 
 // ─── Azioni "di state-modification" derivate dalle regole ─────────────────────
 // Alcune regole non riguardano solo le decisioni future ma anche la situazione
-// attuale (es. ho 5 pacchi in mano ma stack_size=3 → vanno scaricati 2).
+// attuale (es. ho 5 pacchi in mano ma stack_size=3 -> vanno scaricati 2).
 // Queste vanno trasformate in azioni concrete sul mondo (emitPutdown selettivo)
 // PRIMA che il BDI deliberi. Si chiama dopo updateSensing e prima di deliberate.
 async function applyRulesAsActions(socket, beliefs) {
@@ -196,10 +196,10 @@ async function applyRulesAsActions(socket, beliefs) {
         }
     }
 
-    // NB: per stack_size NON scarichiamo più gli "extra" a terra. Buttare via
-    // pacchi già raccolti era sprecone e causava jitter (li ri-raccoglievi
-    // subito). Lo stack è gestito SOLO al momento della consegna (vedi
-    // applyRulesToPredicate, modalità "pragmatica").
+    // NB: per stack_size NON scarichiamo piu gli "extra" a terra. Buttare via
+    // pacchi gia raccolti era sprecone e causava jitter (li ri-raccoglievi
+    // subito). Lo stack e gestito SOLO al momento della consegna (vedi
+    // applyRulesToPredicate, modalita "pragmatica").
 
     if (idsToDrop.size > 0) {
         const ids = [...idsToDrop];
@@ -209,7 +209,7 @@ async function applyRulesAsActions(socket, beliefs) {
     }
 }
 
-// Helper: la tile è davvero occupata da un nemico (non phantom-block)?
+// Helper: la tile e davvero occupata da un nemico (non phantom-block)?
 function isTileOccupiedByEnemy(tile, beliefs) {
     for (const [id, a] of beliefs.agents.entries()) {
         if (String(id).startsWith('__forbidden_')) continue;
@@ -219,7 +219,7 @@ function isTileOccupiedByEnemy(tile, beliefs) {
     return false;
 }
 
-// Trova il pacco libero più vicino (anche ricordato/fuori vista). Null se nessuno.
+// Trova il pacco libero piu vicino (anche ricordato/fuori vista). Null se nessuno.
 function nearestFreeParcel(beliefs) {
     const free = [...(beliefs.parcels?.values() ?? [])].filter(p => !p.carriedBy);
     if (free.length === 0) return null;
@@ -229,7 +229,7 @@ function nearestFreeParcel(beliefs) {
     return free[0];
 }
 
-// Sceglie una spawn tile sensata: alta visibilità, e vicina a me.
+// Sceglie una spawn tile sensata: alta visibilita, e vicina a me.
 function bestSpawnTile(beliefs) {
     const spawnVis = beliefs.spawnVisibility ?? new Map();
     if (spawnVis.size === 0) return null;
@@ -238,7 +238,7 @@ function bestSpawnTile(beliefs) {
     for (const [key, vis] of spawnVis.entries()) {
         const [x, y] = key.split('_').map(Number);
         const dist = Math.abs(x - me.x) + Math.abs(y - me.y);
-        const score = vis * 10 - dist;     // visibilità prima, distanza poi
+        const score = vis * 10 - dist;     // visibilita prima, distanza poi
         if (score > bestScore) { best = { x, y }; bestScore = score; }
     }
     return best;
@@ -246,7 +246,7 @@ function bestSpawnTile(beliefs) {
 
 // Quando una regola blocca il 'deliver', l'agente DEVE comunque fare qualcosa
 // di utile: cerca un pacco da raccogliere; se non ne vede, vai su una spawn
-// tile (con coordinate reali, sennò GoToSpawn fa solo sleep e l'agente si
+// tile (con coordinate reali, senno GoToSpawn fa solo sleep e l'agente si
 // pianta).
 function redirectAwayFromDeliver(beliefs) {
     const p = nearestFreeParcel(beliefs);
@@ -255,20 +255,20 @@ function redirectAwayFromDeliver(beliefs) {
     }
     const s = bestSpawnTile(beliefs);
     if (s) return ['go_to_spawn', s.x, s.y];
-    return ['go_to_spawn'];   // fallback solo se proprio non c'è altro
+    return ['go_to_spawn'];   // fallback solo se proprio non c'e altro
 }
 
 function applyRulesToPredicate(predicate) {
     if (!predicate) return predicate;
     const [action, ...args] = predicate;
 
-    // NB: stack_size NON è più gestito qui. La logica "consegna in stack di N"
-    // vive in options.js (shouldDeliver): finché porti < N l'agente resta in
-    // modalità RACCOLTA e usa la pattuglia normale del BDI (con rotazione delle
-    // zone spawn esauste). La quantità esatta consegnata la gestiscono moves.js
+    // NB: stack_size NON e piu gestito qui. La logica "consegna in stack di N"
+    // vive in options.js (shouldDeliver): finche porti < N l'agente resta in
+    // modalita RACCOLTA e usa la pattuglia normale del BDI (con rotazione delle
+    // zone spawn esauste). La quantita esatta consegnata la gestiscono moves.js
     // (consegna automatica) e plans.js (piano Deliver).
 
-    // zero_delivery: la tile target è vietata → ne scelgo un'altra (la più
+    // zero_delivery: la tile target e vietata -> ne scelgo un'altra (la piu
     // vicina che non sia nella lista).
     if (Array.isArray(activeRules.zeroDeliveries) && action === 'deliver') {
         const [x, y] = args;
@@ -277,14 +277,14 @@ function applyRulesToPredicate(predicate) {
                 d => !activeRules.zeroDeliveries.some(t => t.x === d.x && t.y === d.y)
             );
             if (alts.length === 0) {
-                console.log(`[RULES] zeroDelivery: nessuna delivery permessa → redirect`);
+                console.log(`[RULES] zeroDelivery: nessuna delivery permessa -> redirect`);
                 return redirectAwayFromDeliver(beliefs);
             }
             alts.sort((a, b) =>
                 (Math.abs(a.x-beliefs.me.x)+Math.abs(a.y-beliefs.me.y)) -
                 (Math.abs(b.x-beliefs.me.x)+Math.abs(b.y-beliefs.me.y)));
             const alt = alts[0];
-            console.log(`[RULES] zeroDelivery: (${x},${y}) vietata → (${alt.x},${alt.y})`);
+            console.log(`[RULES] zeroDelivery: (${x},${y}) vietata -> (${alt.x},${alt.y})`);
             return ['deliver', alt.x, alt.y];
         }
     }
@@ -337,7 +337,7 @@ console.log(`[LLM] Pronto. me=(${beliefs.me.x},${beliefs.me.y}) team=${beliefs.m
 // Coordinamento di team (livello 3): accende communication.js e i beliefs.coord.
 initCoordination(socket);
 
-// Stampa UNA VOLTA la mappa con le coordinate, così è chiaro come sono i numeri.
+// Stampa UNA VOLTA la mappa con le coordinate, cosi e chiaro come sono i numeri.
 console.log(formatMap(beliefs));
 
 // 4. Avvia l'agente LLM (queue + handler missioni). Gli passiamo:
@@ -354,13 +354,13 @@ setInterval(() => {
     const carried = beliefs.carriedParcels?.length ?? 0;
     const carriedValue = (beliefs.carriedParcels ?? [])
         .reduce((s, p) => s + (p.reward || 0), 0);
-    const mode = bdiPaused ? '🤖 MISSION' : '🚚 BDI';
+    const mode = bdiPaused ? '[MISSION] MISSION' : '[BDI] BDI';
     console.log(`[HEARTBEAT] ${mode} | @(${x},${y}) score=${beliefs.me.score ?? 0} | carry=${carried} (${carriedValue}pt)`);
 }, 5000);
 
 // 5. Safety net del BDI: rideliberiamo ogni 200ms anche senza sensing nuovo
 //    (uguale a main.js). Tace quando bdiPaused. Applichiamo sempre le regole
-//    (forbidden_tile come muri, ecc.) così restano coerenti tra un sensing e l'altro.
+//    (forbidden_tile come muri, ecc.) cosi restano coerenti tra un sensing e l'altro.
 while (true) {
     if (!bdiPaused) {
         applyRulesToBeliefs();

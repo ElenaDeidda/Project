@@ -1,16 +1,16 @@
-// coordination.js — Task cooperativi di livello 3 (comunicazione BDI ↔ LLM).
+// coordination.js - Task cooperativi di livello 3 (comunicazione BDI ↔ LLM).
 // Caricato da ENTRAMBI i processi (main.js e llm_main.js). Si appoggia a
 // communication.js per i messaggi di team e pilota i loop BDI tramite
 // `beliefs.coord` ({ frozen, override, role }).
 //
 // Tre task:
-//   1) RENDEZVOUS  — entrambi entro distanza ≤ maxDist da (x,y) e si aspettano.
-//   2) STAFFETTA   — un pacco preso da un agente e consegnato dall'altro (+bonus).
+//   1) RENDEZVOUS  - entrambi entro distanza <= maxDist da (x,y) e si aspettano.
+//   2) STAFFETTA   - un pacco preso da un agente e consegnato dall'altro (+bonus).
 //                    Ruoli: BDI = raccoglitore, LLM = postino. "Incontro poi mollo":
 //                    il raccoglitore va alla tile di handover e ASPETTA il postino,
 //                    poi lascia i pacchi; il postino li recupera e consegna.
-//   3) RED LIGHT   — tutti su una riga DISPARI, poi freeze finché non arriva il
-//                    messaggio "green" (relay dell'LLM) → ripartono; "red" → fermi.
+//   3) RED LIGHT   - tutti su una riga DISPARI, poi freeze finche non arriva il
+//                    messaggio "green" (relay dell'LLM) -> ripartono; "red" -> fermi.
 
 import { beliefs, getBlockedCells, deliverableIds } from './beliefs.js';
 import { initComms, broadcast, sendTo, onTeamMessage, getTeammates } from './communication.js';
@@ -34,7 +34,7 @@ function defaultCoord() {
         _postman:    null,  // id del postino (lato collector)
         _collector:  null,  // id del raccoglitore (lato postman)
         _handover:   null,  // { tile:{x,y}, ids:[...] } handover in corso (postman)
-        _postmanReady: false, // il postino è arrivato alla tile di handover (collector)
+        _postmanReady: false, // il postino e arrivato alla tile di handover (collector)
         _dropped:    false, // il collector ha lasciato i pacchi (postman)
         _relayBusy:  false, // collector: handover in corso, NON avviarne un altro
         _dropTile:   null,  // collector: tile dove ho ceduto i pacchi (non ri-raccoglierli)
@@ -42,7 +42,7 @@ function defaultCoord() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INIT — chiamare dopo onYou (beliefs.me.teamId popolato)
+// INIT - chiamare dopo onYou (beliefs.me.teamId popolato)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function initCoordination(socket) {
@@ -68,36 +68,36 @@ export function initCoordination(socket) {
     });
     onTeamMessage('coord_handover', (p, from) => {       // lato POSTINO
         const c = beliefs.coord;
-        // Un fetch è già in corso → ignoro (la staffetta è serializzata: il
-        // raccoglitore non dovrebbe mandarne un altro finché non consegno).
+        // Un fetch e gia in corso -> ignoro (la staffetta e serializzata: il
+        // raccoglitore non dovrebbe mandarne un altro finche non consegno).
         if (c.override?.[0] === 'relay_fetch') {
-            log(`staffetta: handover (${p.tile.x},${p.tile.y}) ignorato — sto già recuperando`);
+            log(`staffetta: handover (${p.tile.x},${p.tile.y}) ignorato - sto gia recuperando`);
             return;
         }
         c._collector = from;
         c._handover  = { tile: p.tile, ids: p.ids ?? [] };
         c._dropped   = false;
         c.override   = ['relay_fetch', p.tile.x, p.tile.y];
-        log(`staffetta: ricevuto handover su (${p.tile.x},${p.tile.y}) — vado a recuperare`);
+        log(`staffetta: ricevuto handover su (${p.tile.x},${p.tile.y}) - vado a recuperare`);
     });
     onTeamMessage('coord_postman_ready', () => {         // lato RACCOGLITORE
         beliefs.coord._postmanReady = true;
-        log('staffetta: il postino è pronto sulla tile di handover');
+        log('staffetta: il postino e pronto sulla tile di handover');
     });
     onTeamMessage('coord_dropped', () => {               // lato POSTINO
         beliefs.coord._dropped = true;
-        log('staffetta: il raccoglitore ha lasciato i pacchi → li prendo');
+        log('staffetta: il raccoglitore ha lasciato i pacchi -> li prendo');
     });
     onTeamMessage('coord_relay_done', () => {            // lato RACCOGLITORE
         beliefs.coord._relayBusy = false;
         beliefs.coord._dropTile  = null;
-        log('staffetta: il postino ha CONSEGNATO → posso cedere il prossimo carico');
+        log('staffetta: il postino ha CONSEGNATO -> posso cedere il prossimo carico');
     });
 
     // ── RED LIGHT (task 3) ─────────────────────────────────────────────────
     onTeamMessage('coord_redlight_start', (p) => beginRedLight(p.row ?? 'odd', false));
-    onTeamMessage('coord_go',   () => { beliefs.coord.frozen = false; log('🟢 GREEN → riparto'); });
-    onTeamMessage('coord_stop', () => { beliefs.coord.frozen = true;  log('🔴 RED → fermo'); });
+    onTeamMessage('coord_go',   () => { beliefs.coord.frozen = false; log('GREEN GREEN -> riparto'); });
+    onTeamMessage('coord_stop', () => { beliefs.coord.frozen = true;  log('RED RED -> fermo'); });
 
     log(`inizializzato (team=${beliefs.me.teamId || '??'})`);
 }
@@ -131,7 +131,7 @@ export function startFreezeInPlace() {
     beliefs.coord._redlight = true;
     beliefs.coord.frozen    = true;
     log('reactive: FERMO sul posto, attendo "green"');
-    return 'Freeze attivato: fermo finché non arriva "green"';
+    return 'Freeze attivato: fermo finche non arriva "green"';
 }
 
 function beginRendezvous(x, y, maxDist, broadcastIt) {
@@ -150,28 +150,28 @@ function beginRedLight(row, broadcastIt) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SEGNALE ADMIN (red light): "green"/"red" in chat → relay al team
+// SEGNALE ADMIN (red light): "green"/"red" in chat -> relay al team
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GO_WORDS   = /\b(green|go|via|avanti|start)\b/i;
 const STOP_WORDS = /\b(red|stop|alt|ferm)\b/i;
 
 /**
- * Se è in corso un red-light e il testo è un segnale breve, lo gestisce
- * (relay 'coord_go'/'coord_stop' al team) e ritorna true → NON è una missione.
+ * Se e in corso un red-light e il testo e un segnale breve, lo gestisce
+ * (relay 'coord_go'/'coord_stop' al team) e ritorna true -> NON e una missione.
  */
 export function maybeHandleAdminSignal(text) {
     const t = String(text || '').trim();
     if (!beliefs.coord?._redlight) return false;
-    if (t.length > 25) return false;            // le missioni vere sono più lunghe
+    if (t.length > 25) return false;            // le missioni vere sono piu lunghe
     if (GO_WORDS.test(t)) {
-        log('segnale admin GREEN → broadcast go');
+        log('segnale admin GREEN -> broadcast go');
         beliefs.coord.frozen = false;
         broadcast('coord_go', {});
         return true;
     }
     if (STOP_WORDS.test(t)) {
-        log('segnale admin RED → broadcast stop');
+        log('segnale admin RED -> broadcast stop');
         beliefs.coord.frozen = true;
         broadcast('coord_stop', {});
         return true;
@@ -199,7 +199,7 @@ export function isRendezvousDone() {
 export function endRendezvous() {
     beliefs.coord._rzv = null;
     beliefs.coord.override = null;
-    log('rendezvous COMPLETO → riprendo il gioco normale');
+    log('rendezvous COMPLETO -> riprendo il gioco normale');
 }
 
 export const isPostmanReady = () => !!beliefs.coord?._postmanReady;
@@ -227,7 +227,7 @@ export function notifyRelayDone() {
     log('staffetta: ho avvisato il raccoglitore di aver consegnato');
 }
 
-/** true se NON devo raccogliere il pacco in (x,y): è quello appena ceduto al
+/** true se NON devo raccogliere il pacco in (x,y): e quello appena ceduto al
  *  postino (evita che il raccoglitore se lo ri-prenda creando un loop). */
 export function isReservedForPostman(x, y) {
     const c = beliefs.coord;
@@ -239,21 +239,21 @@ export function clearOverride() { if (beliefs.coord) beliefs.coord.override = nu
 
 // ─────────────────────────────────────────────────────────────────────────────
 // INTERCETTAZIONE DELLA CONSEGNA (lato RACCOGLITORE, staffetta)
-// Se sto per consegnare ma sono il raccoglitore → dirotto i pacchi su una tile
-// di handover a metà strada e avviso il postino.
+// Se sto per consegnare ma sono il raccoglitore -> dirotto i pacchi su una tile
+// di handover a meta strada e avviso il postino.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function relayInterceptDeliver(predicate) {
     const c = beliefs.coord;
     if (!c || c.role !== 'collector') return predicate;
-    if (c.override) return c.override;                       // handover già in corso
+    if (c.override) return c.override;                       // handover gia in corso
     if (!Array.isArray(predicate) || predicate[0] !== 'deliver') return predicate;
 
     // Staffetta SERIALIZZATA: un handover alla volta. Se il postino non ha ancora
-    // consegnato il carico precedente, NON ne avvio un altro — tengo i pacchi e
+    // consegnato il carico precedente, NON ne avvio un altro - tengo i pacchi e
     // aspetto (resto in zona senza consegnare da solo, per non perdere il bonus).
     if (c._relayBusy) {
-        log('staffetta: postino ancora in consegna → aspetto prima di cedere altro');
+        log('staffetta: postino ancora in consegna -> aspetto prima di cedere altro');
         return ['go_to_spawn'];
     }
 
@@ -267,7 +267,7 @@ export function relayInterceptDeliver(predicate) {
     c._postmanReady = false;
     c.override      = ['relay_drop', H.x, H.y, ids];
     sendTo(c._postman, 'coord_handover', { tile: H, ids });
-    log(`staffetta: consegna dirottata sulla tile di handover (${H.x},${H.y}) — ${ids.length} pacchi`);
+    log(`staffetta: consegna dirottata sulla tile di handover (${H.x},${H.y}) - ${ids.length} pacchi`);
     return c.override;
 }
 
@@ -281,7 +281,7 @@ function reachMap() {
     return reachableDistances(beliefs.me, beliefs.mapTiles, getBlockedCells(), beliefs.isDirectionalMap);
 }
 
-/** Tile RAGGIUNGIBILE più vicina a ME che sia entro `maxDist` (Manhattan) da `point`. */
+/** Tile RAGGIUNGIBILE piu vicina a ME che sia entro `maxDist` (Manhattan) da `point`. */
 export function nearestReachableWithinDist(point, maxDist) {
     const dist = reachMap();
     let best = null, bestD = Infinity;
@@ -290,7 +290,7 @@ export function nearestReachableWithinDist(point, maxDist) {
         if (manhattan(x, y, point.x, point.y) > maxDist) continue;
         if (d < bestD) { bestD = d; best = { x, y }; }
     }
-    // fallback: nessuna tile entro maxDist raggiungibile → la più vicina al punto
+    // fallback: nessuna tile entro maxDist raggiungibile -> la piu vicina al punto
     if (!best) {
         let bestM = Infinity;
         for (const [key] of dist) {
@@ -319,7 +319,7 @@ export function freeNeighborOf(tile) {
     return best ?? tile;
 }
 
-/** Tile RAGGIUNGIBILE più vicina a ME con riga (y) della parità richiesta. */
+/** Tile RAGGIUNGIBILE piu vicina a ME con riga (y) della parita richiesta. */
 export function nearestRowTile(parity = 'odd') {
     const want = parity === 'even' ? 0 : 1;
     const dist = reachMap();
@@ -333,8 +333,8 @@ export function nearestRowTile(parity = 'odd') {
 }
 
 /**
- * Tile di handover: tra le tile raggiungibili da ME, quella più vicina al punto
- * medio fra me e la delivery (così il postino fa il tragitto residuo). Riusa il
+ * Tile di handover: tra le tile raggiungibili da ME, quella piu vicina al punto
+ * medio fra me e la delivery (cosi il postino fa il tragitto residuo). Riusa il
  * BFS per garantire che sia effettivamente raggiungibile.
  */
 export function handoverTile(me, delivery) {

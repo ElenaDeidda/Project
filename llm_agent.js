@@ -1,14 +1,14 @@
 // llm_agent.js
-// Agente LLM (parte 2 del progetto) — interpreta special missions in linguaggio
+// Agente LLM (parte 2 del progetto) - interpreta special missions in linguaggio
 // naturale e le esegue chiamando i tool del tuo sistema.
 //
-// Architettura (slide 12 del prof): Memory → Planner → Exec(Tools) → Replan?
+// Architettura (slide 12 del prof): Memory -> Planner -> Exec(Tools) -> Replan?
 // Pattern di esecuzione: Planning Decoupled + State-Based Context.
-//   FASE 1  generatePlan()   → 1 sola chiamata LLM: produce la sequenza di step
-//   FASE 2  execution loop    → esegue gli step con SOLO tool call (0 LLM)
-//   FASE 3  reflectOnError()  → chiamata LLM opzionale, SOLO su errore di uno step
+//   FASE 1  generatePlan()   -> 1 sola chiamata LLM: produce la sequenza di step
+//   FASE 2  execution loop    -> esegue gli step con SOLO tool call (0 LLM)
+//   FASE 3  reflectOnError()  -> chiamata LLM opzionale, SOLO su errore di uno step
 // Niente accumulo di history: l'array `messages` resta [system, user] (2 elementi)
-// e uno `state` mutabile traccia il progresso → context costante (~400-600 token).
+// e uno `state` mutabile traccia il progresso -> context costante (~400-600 token).
 //
 // SCOPE attuale: L1 + L2 + L3 (coordinamento di team BDI ↔ LLM).
 //   - Lettura chat per ricevere missioni; i task cooperativi (family "coordinate":
@@ -31,7 +31,7 @@ import {
 } from './coordination.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. CONFIG LLM — LiteLLM UniTN (come lab8)
+// 1. CONFIG LLM - LiteLLM UniTN (come lab8)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const baseURL = process.env.LITELLM_BASE_URL || 'https://llm.bears.disi.unitn.it/v1';
@@ -52,7 +52,7 @@ const client = new OpenAI({ baseURL, apiKey });
 const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS ?? 30000);
 
 // Timeout esplicito: se l'API resta appesa (server lento, VPN traballante),
-// non vogliamo che il loop ReAct si pianti per minuti. Throw → il loop
+// non vogliamo che il loop ReAct si pianti per minuti. Throw -> il loop
 // gestisce l'errore come "formato non valido" e prova ancora.
 async function callModel(messages, { temperature = TEMP, timeoutMs = LLM_TIMEOUT_MS } = {}) {
     return await Promise.race([
@@ -66,7 +66,7 @@ async function callModel(messages, { temperature = TEMP, timeoutMs = LLM_TIMEOUT
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SNAPSHOT DEL MONDO — usato dal tool `inspect`
+// SNAPSHOT DEL MONDO - usato dal tool `inspect`
 // Espone tutti i beliefs in forma testuale compatta. Quello che conosce il
 // BDI lo conosce anche l'LLM. Se aggiungi un campo ai beliefs e lo vuoi
 // visibile all'LLM, aggiungilo qui.
@@ -76,7 +76,7 @@ function snapshotWorld(beliefs, activeRules = {}) {
     const me = beliefs.me ?? {};
     const lines = [];
 
-    // Identità + stato
+    // Identita + stato
     lines.push(`me: id=${me.id} name=${me.name} team=${me.teamName}(${me.teamId})`);
     lines.push(`position: x=${Math.round(me.x)} y=${Math.round(me.y)} score=${me.score ?? '?'}`);
 
@@ -110,7 +110,7 @@ function snapshotWorld(beliefs, activeRules = {}) {
     }`);
 
     // Spawn-rich tiles: dove i pacchi possono apparire. NON sono delivery!
-    // Espone i top-N per visibilità (= quante spawn tiles si vedono da lì):
+    // Espone i top-N per visibilita (= quante spawn tiles si vedono da li):
     // sono i posti migliori dove andare/aspettare per trovare pacchi.
     const spawnVis = beliefs.spawnVisibility ?? new Map();
     if (spawnVis.size > 0) {
@@ -149,7 +149,7 @@ function snapshotWorld(beliefs, activeRules = {}) {
         }
     }
 
-    // Regole L2 attive (così l'LLM sa cosa ha già installato)
+    // Regole L2 attive (cosi l'LLM sa cosa ha gia installato)
     const ruleKeys = Object.keys(activeRules);
     if (ruleKeys.length > 0) {
         lines.push(`active_rules: ${JSON.stringify(activeRules)}`);
@@ -173,7 +173,7 @@ function snapshotWorld(beliefs, activeRules = {}) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. TOOLS REGISTRY
-//    Ogni tool è una funzione async (args, ctx) → string (observation).
+//    Ogni tool e una funzione async (args, ctx) -> string (observation).
 //    ctx contiene { socket, beliefs, deps } passati a startLlmAgent.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -199,9 +199,9 @@ function makeTools(ctx) {
         // Restituisce uno snapshot testuale compatto ma completo.
         inspect: () => snapshotWorld(beliefs, deps?.activeRules ?? {}),
 
-        // ── Quick-win: la delivery più vicina a me ──────────────────────────
+        // ── Quick-win: la delivery piu vicina a me ──────────────────────────
         // Evita all'LLM il calcolo ripetuto delle distanze. Utile per
-        // missioni tipo "vai alla delivery più vicina".
+        // missioni tipo "vai alla delivery piu vicina".
         nearest_delivery: () => {
             const dps = beliefs.deliveryPoints ?? [];
             if (dps.length === 0) return 'Nessuna delivery tile nota';
@@ -223,13 +223,13 @@ function makeTools(ctx) {
                 beliefs.me, target, socket, beliefs.mapTiles, () => false
             );
             // VERIFICA REALE: non fidarti del solo codice di ritorno. navigateTo
-            // può restituire 'stopped' (interrotto) o arrivare solo in parte;
-            // confrontiamo la posizione EFFETTIVA col target così non dichiariamo
-            // un arrivo che non è avvenuto. Se non siamo arrivati → Error, che
+            // puo restituire 'stopped' (interrotto) o arrivare solo in parte;
+            // confrontiamo la posizione EFFETTIVA col target cosi non dichiariamo
+            // un arrivo che non e avvenuto. Se non siamo arrivati -> Error, che
             // fa scattare la reflection invece di un falso "completato".
             const here = { x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y) };
             if (here.x !== target.x || here.y !== target.y) {
-                return `Error: non arrivato a (${target.x},${target.y}) — ora a (${here.x},${here.y}) [navigateTo=${res}]`;
+                return `Error: non arrivato a (${target.x},${target.y}) - ora a (${here.x},${here.y}) [navigateTo=${res}]`;
             }
             return `Arrivato a (${target.x},${target.y})`;
         },
@@ -247,7 +247,7 @@ function makeTools(ctx) {
         // ── L1: rispondi al mittente della missione ─────────────────────────
         // Le missioni-domanda ("capital of Italy?", "calcola 5*5") richiedono
         // di mandare la risposta all'agente che ha inviato il prompt.
-        // ctx.lastSender è popolato in startLlmAgent al momento di onMsg.
+        // ctx.lastSender e popolato in startLlmAgent al momento di onMsg.
         answer: (input) => {
             const to = ctx.lastSender;
             if (!to) return 'Error: nessun mittente noto a cui rispondere';
@@ -262,25 +262,25 @@ function makeTools(ctx) {
         //
         // Input: JSON con {type, ...params}. Tipi supportati:
         //   {"type":"stack_size", "n":3}
-        //     → consegna solo quando porti esattamente 3 pacchi
+        //     -> consegna solo quando porti esattamente 3 pacchi
         //   {"type":"forbidden_tile", "x":5, "y":7}
-        //     → A* evita la tile (può essere chiamato più volte per più tile)
+        //     -> A* evita la tile (puo essere chiamato piu volte per piu tile)
         //   {"type":"zero_delivery", "x":5, "y":7}
-        //     → mai consegnare su questa delivery (ne sceglie un'altra)
+        //     -> mai consegnare su questa delivery (ne sceglie un'altra)
         //   {"type":"bonus_delivery", "x":5, "y":7}
-        //     → preferisci questa delivery quando possibile
+        //     -> preferisci questa delivery quando possibile
         //   {"type":"max_parcel_reward", "value":10}
-        //     → non raccogliere pacchi con reward > 10
+        //     -> non raccogliere pacchi con reward > 10
         set_rule: (input) => {
             if (!deps?.activeRules) return 'Error: activeRules non disponibile';
             let r;
             try { r = JSON.parse(String(input)); }
-            catch (e) { return `Error: input non è JSON valido: ${e.message}`; }
+            catch (e) { return `Error: input non e JSON valido: ${e.message}`; }
             if (!r || typeof r.type !== 'string') return 'Error: serve {"type": "..."}';
             const rules = deps.activeRules;
             switch (r.type) {
                 case 'stack_size':
-                    if (!Number.isInteger(r.n) || r.n < 1) return 'Error: stack_size richiede n intero ≥ 1';
+                    if (!Number.isInteger(r.n) || r.n < 1) return 'Error: stack_size richiede n intero >= 1';
                     rules.stackSize = r.n;
                     return `Regola installata: stackSize=${r.n}`;
                 case 'forbidden_tile':
@@ -374,26 +374,26 @@ Available tools:
   (use for questions like "what is the capital of Italy?")
 - set_rule(json): installs a persistent rule that modifies the agent's normal
   pickup/deliver behaviour. Input is a JSON object. Supported rule types:
-    {"type":"stack_size",       "n": 3}         → deliver only when carrying
+    {"type":"stack_size",       "n": 3}         -> deliver only when carrying
                                                    EXACTLY n parcels
-    {"type":"forbidden_tile",   "x": 5, "y": 7} → A* will avoid this tile
+    {"type":"forbidden_tile",   "x": 5, "y": 7} -> A* will avoid this tile
                                                    (call multiple times for
                                                    multiple tiles)
-    {"type":"zero_delivery",    "x": 5, "y": 7} → never deliver here
-    {"type":"bonus_delivery",   "x": 5, "y": 7} → prefer delivering here
-    {"type":"max_parcel_reward","value": 10}    → don't pick up parcels with
+    {"type":"zero_delivery",    "x": 5, "y": 7} -> never deliver here
+    {"type":"bonus_delivery",   "x": 5, "y": 7} -> prefer delivering here
+    {"type":"max_parcel_reward","value": 10}    -> don't pick up parcels with
                                                    reward > value
 - clear_rule(name): removes a previously installed rule. Pass "all" to wipe.
 - list_rules(): prints the currently installed rules (or "Nessuna").
 
-STRICT OUTPUT FORMAT — choose exactly one:
+STRICT OUTPUT FORMAT - choose exactly one:
 
-FORMAT 1 — use one tool:
+FORMAT 1 - use one tool:
 Thought: <brief reasoning>
 Action: <tool name>
 Action Input: <input, or "none">
 
-FORMAT 2 — finished:
+FORMAT 2 - finished:
 Thought: I have completed the mission.
 Final Answer: <short summary of what you did>
 
@@ -406,32 +406,32 @@ Rules:
   carry, delivery points, leftmost/rightmost/edge, nearest parcel, ...) ALWAYS
   call inspect() FIRST to read real values from the world. Never guess.
 
-WORLD MODEL — read carefully:
+WORLD MODEL - read carefully:
 - delivery_points: tiles where you DROP parcels with putdown() to score points.
   Parcels are NOT generated here. Going to a delivery_point looking for parcels
   is wrong.
 - top_spawn_tiles: tiles where the server SPAWNS parcels. To FIND parcels,
   navigate to one of these (the highest vis= score is the best lookout).
 - visible_free_parcels: parcels on the ground inside your observation_distance.
-  If empty, you can't see any from where you are — move to a top_spawn_tile and
+  If empty, you can't see any from where you are - move to a top_spawn_tile and
   call inspect() again.
 
 For "pick the nearest parcel and deliver" type missions:
-  1. inspect() → look at visible_free_parcels
-  2. If empty: navigate_to a top_spawn_tile → inspect() again (parcels may have
+  1. inspect() -> look at visible_free_parcels
+  2. If empty: navigate_to a top_spawn_tile -> inspect() again (parcels may have
      entered your observation range)
-  3. Once you see a parcel: navigate_to its (x,y) → pickup()
-  4. inspect() → choose the NEAREST delivery_point from your position
-  5. navigate_to that delivery → putdown()
+  3. Once you see a parcel: navigate_to its (x,y) -> pickup()
+  4. inspect() -> choose the NEAREST delivery_point from your position
+  5. navigate_to that delivery -> putdown()
 - If navigate_to returns "irraggiungibile" twice for the SAME target, the tile
   is truly a wall: stop trying it and produce Final Answer explaining you
   could not reach the destination. Do not try random nearby tiles.
 
-MISSION TYPES — IMPORTANT:
+MISSION TYPES - IMPORTANT:
 There are THREE families. Always pick the right one based on the mission text.
 
 1) QUESTION / CALCULATION (e.g. "Calcola 5*5", "What is the capital of Italy?",
-   "Quanto fa 7+3?"). The server CANNOT see what you "thought" — it only sees
+   "Quanto fa 7+3?"). The server CANNOT see what you "thought" - it only sees
    what you sent via answer(). You MUST end such missions with:
      Action: answer / Action Input: <the final result>
    Only AFTER the answer() Observation, output Final Answer.
@@ -449,38 +449,38 @@ There are THREE families. Always pick the right one based on the mission text.
    When the mission lists MULTIPLE candidate coordinates (in brackets,
    in JSON, or as a list) and asks you to reach "one of" them, you must
    pick the CLOSEST one to your current position and navigate there.
-   The coordinates can come in different formats — parse them carefully:
-     "(1,2)"            → x=1, y=2
-     "{\"x\":1,\"y\":2}"  → x=1, y=2
-     "[1,2]"            → x=1, y=2
+   The coordinates can come in different formats - parse them carefully:
+     "(1,2)"            -> x=1, y=2
+     "{\"x\":1,\"y\":2}"  -> x=1, y=2
+     "[1,2]"            -> x=1, y=2
    Example flow for such a mission:
      Step 1: Action: inspect / Action Input: none      (get my position)
      Step 2: Thought: choose the candidate closest to (my.x, my.y)
              Action: navigate_to / Action Input: x,y of the closest one
      Step 3: Final Answer: arrived at (x,y) for the bonus.
 
-3) PERSISTENT RULE — Level 2 (e.g. "Deliver stacks of exactly 3 parcels",
+3) PERSISTENT RULE - Level 2 (e.g. "Deliver stacks of exactly 3 parcels",
    "Do not go through tile (5,7)", "Every time you deliver in (2,2) you get
    0 points", "If you deliver parcels with reward > 10 you get no reward").
-   These DO NOT describe a single action — they CHANGE THE RULES of the game
+   These DO NOT describe a single action - they CHANGE THE RULES of the game
    for the rest of the match. You MUST translate them into a set_rule() call.
    Markers that the mission IS a rule:
      "every time", "always", "from now on", "for the rest of the game",
      "stacks of", "do not / don't", "if you deliver/pick".
    IMPORTANT: do NOT install a rule when the mission is one-shot. Words like
    "una tantum", "one-time", "once", "this time" mean ATOMIC (family 2).
-   Examples of mission → tool call:
+   Examples of mission -> tool call:
      "Deliver in stacks of exactly 3 to double the reward"
-        → set_rule({"type":"stack_size","n":3})
+        -> set_rule({"type":"stack_size","n":3})
      "Do not go through tile (5,7) otherwise you lose 50pts"
-        → set_rule({"type":"forbidden_tile","x":5,"y":7})
+        -> set_rule({"type":"forbidden_tile","x":5,"y":7})
      "Every time you deliver in (2,2) you get 0 pts"
-        → set_rule({"type":"zero_delivery","x":2,"y":2})
+        -> set_rule({"type":"zero_delivery","x":2,"y":2})
      "Every time you deliver in (3,3) or (7,7) you get 5x pts"
-        → set_rule({"type":"bonus_delivery","x":3,"y":3})
-        → set_rule({"type":"bonus_delivery","x":7,"y":7})
+        -> set_rule({"type":"bonus_delivery","x":3,"y":3})
+        -> set_rule({"type":"bonus_delivery","x":7,"y":7})
      "If you deliver parcels with reward higher than 10 you get no reward"
-        → set_rule({"type":"max_parcel_reward","value":10})
+        -> set_rule({"type":"max_parcel_reward","value":10})
    After installing the rule(s), produce Final Answer immediately. The rule
    will then be enforced automatically by the agent's BDI loop.
 
@@ -493,9 +493,9 @@ For calculation missions, the flow is exactly:
 `.trim();
 }
 
-// extractAction: parser dello stile ReAct (Action / Action Input). Non più
+// extractAction: parser dello stile ReAct (Action / Action Input). Non piu
 // usato dal loop principale (sostituito da Planning Decoupled), ma mantenuto
-// per compatibilità / debug di eventuali output in vecchio formato.
+// per compatibilita / debug di eventuali output in vecchio formato.
 function extractAction(text) {
     const a  = text.match(/^Action:\s*(.+)$/im);
     const ai = text.match(/^Action Input:\s*(.+)$/im);
@@ -517,12 +517,12 @@ function extractFinalAnswer(text) {
 // 4. PLANNING DECOUPLED + STATE-BASED CONTEXT
 //
 // Invece del loop ReAct (che accumulava tutta la history nei `messages` ad ogni
-// step → context da 150 a 2100 token), separiamo PLANNING ed EXECUTION:
-//   FASE 1  generatePlan()    → 1 sola chiamata LLM, produce la sequenza di step
-//   FASE 2  execution loop     → esegue gli step con SOLO tool call (0 LLM)
-//   FASE 3  reflectOnError()   → chiamata LLM opzionale, SOLO quando uno step
-//                                fallisce, per correggere il piano da lì in poi
-// Il context resta costante (~400-600 token): l'array `messages` è sempre di 2
+// step -> context da 150 a 2100 token), separiamo PLANNING ed EXECUTION:
+//   FASE 1  generatePlan()    -> 1 sola chiamata LLM, produce la sequenza di step
+//   FASE 2  execution loop     -> esegue gli step con SOLO tool call (0 LLM)
+//   FASE 3  reflectOnError()   -> chiamata LLM opzionale, SOLO quando uno step
+//                                fallisce, per correggere il piano da li in poi
+// Il context resta costante (~400-600 token): l'array `messages` e sempre di 2
 // elementi [system, user] e lo `state` mutabile traccia il progresso.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -536,7 +536,7 @@ function buildPlannerPrompt() {
     return `
 You are the planner of a Deliveroo LLM agent. Given a mission in natural language
 and the current world state, break the mission into a SHORT sequence of concrete
-steps. Output ONLY the plan — no reasoning, no extra prose.
+steps. Output ONLY the plan - no reasoning, no extra prose.
 
 Each step has the form "action: target". Valid actions:
 - inspect: (target: none) re-read the current world state
@@ -552,7 +552,7 @@ WORLD MODEL:
 - top_spawn_tiles: tiles where parcels appear. To FIND parcels, go to one of these.
 - visible_free_parcels: parcels currently on the ground that you can see.
 
-MISSION FAMILIES — pick the right one based on the mission text:
+MISSION FAMILIES - pick the right one based on the mission text:
 1) QUESTION / CALCULATION ("Calcola 5*5", "What is the capital of Italy?"). The
    giver only sees what you send via answer. For arithmetic, add a calculate step
    FIRST, then an answer step whose target is "result" (the computed value is sent
@@ -567,7 +567,7 @@ MISSION FAMILIES — pick the right one based on the mission text:
    current position. No answer needed.
      e.g.  1. go_pick_up: (2,3)
            2. go_deliver: nearest
-3) PERSISTENT RULE — Level 2 ("deliver stacks of 3", "don't cross tile (5,7)",
+3) PERSISTENT RULE - Level 2 ("deliver stacks of 3", "don't cross tile (5,7)",
    "every time you deliver in (2,2) you get 0 pts", "reward > 10 gives nothing").
    Translate into ONE set_rule step per rule. Supported JSON:
      {"type":"stack_size","n":3}
@@ -602,7 +602,7 @@ inspect, calculate, go_pick_up, go_deliver, navigate_to, set_rule, answer.
 Common fixes:
 - go_pick_up failed with "no parcel": navigate_to a top_spawn_tile, then
   "go_pick_up: nearest" (a parcel may enter observation range).
-- navigate_to "irraggiungibile": that tile is a wall — choose a different
+- navigate_to "irraggiungibile": that tile is a wall - choose a different
   reachable target, or answer that the destination cannot be reached.
 - the target had no coordinates: read the world state and use real coordinates.
 
@@ -627,7 +627,7 @@ FINAL ANSWER: one short line
 function parsePlan(llmText, startIndex = 0) {  // eslint-disable-line no-unused-vars
     const text = String(llmText || '');
 
-    // Isola il corpo del piano: preferisci ciò che segue un header "PLAN..:".
+    // Isola il corpo del piano: preferisci cio che segue un header "PLAN..:".
     let body = text;
     const planMatch = text.match(/PLAN[^\n]*\n([\s\S]*?)(?:\n\s*FINAL ANSWER:|$)/i);
     if (planMatch) {
@@ -667,14 +667,14 @@ function parseStepContent(content) {
     return { action, target, description: content };
 }
 
-// Normalizza il nome azione: minuscolo, separatori → "_", via i caratteri di
-// markdown (** `` ecc.). "Go Pick Up" / "**go_pick_up**" → "go_pick_up".
+// Normalizza il nome azione: minuscolo, separatori -> "_", via i caratteri di
+// markdown (** `` ecc.). "Go Pick Up" / "**go_pick_up**" -> "go_pick_up".
 function normalizeAction(a) {
     return String(a).trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/[^a-z0-9_]/g, '');
 }
 
-// Il target di un passo "answer" è un segnaposto che rimanda al risultato di un
-// calculate precedente? (così non "inventiamo" il numero: lo prendiamo dal tool)
+// Il target di un passo "answer" e un segnaposto che rimanda al risultato di un
+// calculate precedente? (cosi non "inventiamo" il numero: lo prendiamo dal tool)
 function isResultPlaceholder(t) {
     const s = String(t).trim().toLowerCase();
     return s === '' || /^<.*>$/.test(s) || /\b(result|risultato|computed|above|previous)\b/.test(s);
@@ -686,7 +686,7 @@ function parseCoords(s) {
     return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
 }
 
-// Pacco libero visibile più vicino a me (null se non se ne vedono).
+// Pacco libero visibile piu vicino a me (null se non se ne vedono).
 function nearestFreeParcel(beliefs) {
     const free = [...(beliefs.parcels?.values() ?? [])].filter(p => !p.carriedBy);
     if (free.length === 0) return null;
@@ -697,7 +697,7 @@ function nearestFreeParcel(beliefs) {
     return free[0];
 }
 
-// Delivery point più vicino a me (null se non ne conosco).
+// Delivery point piu vicino a me (null se non ne conosco).
 function nearestDelivery(beliefs) {
     const dps = beliefs.deliveryPoints ?? [];
     if (dps.length === 0) return null;
@@ -713,10 +713,10 @@ function nearestDelivery(beliefs) {
 
 // ── ACQUIRE PERSISTENTE: parametri (allineati al patrol del BDI in options.js) ─
 const ACQUIRE_WAIT_FACTOR   = 2;        // attesa per spawn tile = factor × intervallo di generazione
-const ACQUIRE_WAIT_FALLBACK = 4000;     // ms, se l'intervallo di generazione non è leggibile
+const ACQUIRE_WAIT_FALLBACK = 4000;     // ms, se l'intervallo di generazione non e leggibile
 const ACQUIRE_POLL_MS       = 250;      // ogni quanto ri-controllo beliefs.parcels mentre attendo
-// Tetto massimo complessivo della ricerca. 0 = nessun tetto: cerca finché non
-// trova un pacco o finché la coda interrompe la missione (default voluto dalla
+// Tetto massimo complessivo della ricerca. 0 = nessun tetto: cerca finche non
+// trova un pacco o finche la coda interrompe la missione (default voluto dalla
 // missione "portala a termine a prescindere"). Override con ACQUIRE_MAX_MS.
 const ACQUIRE_MAX_MS        = Number(process.env.ACQUIRE_MAX_MS) || 0;
 
@@ -725,7 +725,7 @@ function obsDistOf(beliefs) {
     return beliefs.config?.GAME?.player?.observation_distance ?? 5;
 }
 
-// Pacco libero ATTUALMENTE VISIBILE (entro obs_distance) più vicino a me.
+// Pacco libero ATTUALMENTE VISIBILE (entro obs_distance) piu vicino a me.
 // A differenza di nearestFreeParcel, ignora i pacchi solo "ricordati" fuori
 // vista (fantasmi): inseguirli porta a "Nessun pacco qui".
 function nearestVisibleParcel(beliefs) {
@@ -741,7 +741,7 @@ function nearestVisibleParcel(beliefs) {
     return visible[0];
 }
 
-// Spawn tile "migliore": alta visibilità, vicina a me. Dove ANDARE a cercare
+// Spawn tile "migliore": alta visibilita, vicina a me. Dove ANDARE a cercare
 // pacchi quando non se ne vede nessuno (invece di inseguire fantasmi).
 function bestSpawnTile(beliefs) {
     const spawnVis = beliefs.spawnVisibility ?? new Map();
@@ -757,7 +757,7 @@ function bestSpawnTile(beliefs) {
 }
 
 // Tutte le spawn tile ordinate best-first (stesso score di bestSpawnTile). Serve
-// per RUOTARE tra le tile invece di martellare sempre la stessa quando è vuota.
+// per RUOTARE tra le tile invece di martellare sempre la stessa quando e vuota.
 function rankedSpawnTiles(beliefs) {
     const spawnVis = beliefs.spawnVisibility ?? new Map();
     const me = beliefs.me ?? { x: 0, y: 0 };
@@ -773,7 +773,7 @@ function rankedSpawnTiles(beliefs) {
 
 // Finestra d'attesa su una spawn tile prima di ruotare: 2× l'intervallo di
 // generazione pacchi (come patrolTimeout() del BDI), altrimenti il fallback.
-// parseIntervalMs ritorna Infinity per 'infinite'/non leggibile → fallback.
+// parseIntervalMs ritorna Infinity per 'infinite'/non leggibile -> fallback.
 function acquireWaitMs(beliefs) {
     const p  = beliefs.config?.GAME?.parcels;
     const ms = parseIntervalMs(p?.generation_event ?? p?.generation_time);
@@ -781,7 +781,7 @@ function acquireWaitMs(beliefs) {
 }
 
 // Navigazione interrompibile (shouldStop legato al signal di abort). Ritorna
-// true SOLO se è davvero arrivato a (x,y) (riusa l'idea di verifica del tool).
+// true SOLO se e davvero arrivato a (x,y) (riusa l'idea di verifica del tool).
 async function navigateInterruptible(ctx, x, y, signal) {
     const { socket, beliefs, deps } = ctx;
     const res = await deps.navigateTo(
@@ -807,8 +807,8 @@ function abortableSleep(ms, signal) {
 
 /**
  * ACQUIRE PERSISTENTE (deterministico, NO LLM): assicura di avere un pacco a
- * bordo. Cicla {prendi il visibile più vicino; se non c'è, vai sulla prossima
- * spawn tile e ASPETTA che ne compaia uno, ruotando le tile} finché non porta
+ * bordo. Cicla {prendi il visibile piu vicino; se non c'e, vai sulla prossima
+ * spawn tile e ASPETTA che ne compaia uno, ruotando le tile} finche non porta
  * un pacco. Esce solo su successo o su abort (o sul tetto ACQUIRE_MAX_MS se >0).
  * @returns {Promise<{success:boolean, outcome?:string, error?:string}>}
  */
@@ -821,53 +821,53 @@ async function acquireParcelPersistent(ctx, signal) {
     const capped    = () => ACQUIRE_MAX_MS > 0 && (Date.now() - startedAt) >= ACQUIRE_MAX_MS;
 
     if (carrying()) {
-        console.log(`${tag} ho già un pacco a bordo — acquisizione immediata`);
-        return { success: true, outcome: 'già carico' };
+        console.log(`${tag} ho gia un pacco a bordo - acquisizione immediata`);
+        return { success: true, outcome: 'gia carico' };
     }
 
-    let sweep = new Set();   // tile già provate in questa "passata"
+    let sweep = new Set();   // tile gia provate in questa "passata"
     let cycle = 0;
     while (true) {
         if (aborted()) return { success: false, error: 'acquire interrotto (abort)' };
         if (capped())  return { success: false, error: `acquire oltre ACQUIRE_MAX_MS=${ACQUIRE_MAX_MS}ms` };
 
-        // 1) C'è un pacco visibile? Vai a prenderlo.
+        // 1) C'e un pacco visibile? Vai a prenderlo.
         const p = nearestVisibleParcel(beliefs);
         if (p) {
             const tx = Math.round(p.x), ty = Math.round(p.y);
-            console.log(`${tag} pacco visibile @ (${tx},${ty}) — vado a prenderlo`);
+            console.log(`${tag} pacco visibile @ (${tx},${ty}) - vado a prenderlo`);
             const arrived = await navigateInterruptible(ctx, tx, ty, signal);
-            if (carrying()) { console.log(`${tag} preso in transito ✓`); return { success: true, outcome: `acquisito @ (${tx},${ty})` }; }
+            if (carrying()) { console.log(`${tag} preso in transito OK`); return { success: true, outcome: `acquisito @ (${tx},${ty})` }; }
             if (aborted())  return { success: false, error: 'acquire interrotto (abort)' };
             if (arrived) {
                 const r = await ctx.socket.emitPickup();
-                if (r && r.length) { console.log(`${tag} pickup ✓ (${r.length} pacchi)`); return { success: true, outcome: `acquisito @ (${tx},${ty})` }; }
-                console.log(`${tag} pacco sparito prima del pickup — continuo`);
+                if (r && r.length) { console.log(`${tag} pickup OK (${r.length} pacchi)`); return { success: true, outcome: `acquisito @ (${tx},${ty})` }; }
+                console.log(`${tag} pacco sparito prima del pickup - continuo`);
             } else {
-                console.log(`${tag} pacco non raggiunto — continuo`);
+                console.log(`${tag} pacco non raggiunto - continuo`);
             }
             continue;
         }
 
-        // 2) Nessun pacco visibile → ruota sulla prossima spawn tile e aspetta.
+        // 2) Nessun pacco visibile -> ruota sulla prossima spawn tile e aspetta.
         const tiles = rankedSpawnTiles(beliefs);
         if (tiles.length === 0) {
-            console.log(`${tag} nessuna spawn tile nota — attendo e riprovo`);
+            console.log(`${tag} nessuna spawn tile nota - attendo e riprovo`);
             if (await abortableSleep(acquireWaitMs(beliefs), signal) === 'aborted')
                 return { success: false, error: 'acquire interrotto (abort)' };
             continue;
         }
         let next = tiles.find(t => !sweep.has(t.key));
-        if (!next) { sweep = new Set(); next = tiles[0]; cycle++; }   // passata finita → si rivisita
+        if (!next) { sweep = new Set(); next = tiles[0]; cycle++; }   // passata finita -> si rivisita
         sweep.add(next.key);
 
         console.log(`${tag} ciclo ${cycle}: vado su spawn tile (${next.x},${next.y}) [score=${next.score}]`);
         const arrived = await navigateInterruptible(ctx, next.x, next.y, signal);
-        if (carrying()) { console.log(`${tag} preso in transito ✓`); return { success: true, outcome: 'acquisito in transito' }; }
+        if (carrying()) { console.log(`${tag} preso in transito OK`); return { success: true, outcome: 'acquisito in transito' }; }
         if (aborted())  return { success: false, error: 'acquire interrotto (abort)' };
         if (!arrived) {
             // tile irraggiungibile ora: piccolo backoff per non ciclare a vuoto.
-            console.log(`${tag} spawn tile (${next.x},${next.y}) irraggiungibile — provo la prossima`);
+            console.log(`${tag} spawn tile (${next.x},${next.y}) irraggiungibile - provo la prossima`);
             if (await abortableSleep(ACQUIRE_POLL_MS, signal) === 'aborted')
                 return { success: false, error: 'acquire interrotto (abort)' };
             continue;
@@ -880,22 +880,22 @@ async function acquireParcelPersistent(ctx, signal) {
         while (Date.now() < deadline) {
             const slept = await abortableSleep(Math.min(ACQUIRE_POLL_MS, deadline - Date.now()), signal);
             if (slept === 'aborted') return { success: false, error: 'acquire interrotto (abort)' };
-            if (carrying())                  { console.log(`${tag} pickup opportunistico in attesa ✓`); return { success: true, outcome: 'acquisito in attesa' }; }
-            if (nearestVisibleParcel(beliefs)) { console.log(`${tag} pacco apparso — vado a prenderlo`); break; }
+            if (carrying())                  { console.log(`${tag} pickup opportunistico in attesa OK`); return { success: true, outcome: 'acquisito in attesa' }; }
+            if (nearestVisibleParcel(beliefs)) { console.log(`${tag} pacco apparso - vado a prenderlo`); break; }
             if (capped()) return { success: false, error: `acquire oltre ACQUIRE_MAX_MS=${ACQUIRE_MAX_MS}ms` };
         }
-        // torna in cima: o un pacco è apparso (gestito al punto 1), o ruoto tile.
+        // torna in cima: o un pacco e apparso (gestito al punto 1), o ruoto tile.
     }
 }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FASE 0: COMPRENSIONE (query rewriting → intento JSON strutturato)
+// FASE 0: COMPRENSIONE (query rewriting -> intento JSON strutturato)
 //
-// 1 sola chiamata LLM il cui UNICO compito è capire COSA fare e in che ORDINE,
+// 1 sola chiamata LLM il cui UNICO compito e capire COSA fare e in che ORDINE,
 // senza inventare coordinate. Da qui ricaviamo gli step in modo DETERMINISTICO
-// (compileIntent), così il planner non può allucinare (es. delivery point
-// inventati). Separare "capire" da "fare" è ciò che rende il tutto robusto.
+// (compileIntent), cosi il planner non puo allucinare (es. delivery point
+// inventati). Separare "capire" da "fare" e cio che rende il tutto robusto.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildUnderstandPrompt() {
@@ -926,7 +926,7 @@ Schema:
   "rules": [ {"type":"forbidden_tile","x":5,"y":7}, {"type":"stack_size","n":3},
              {"type":"zero_delivery","x":2,"y":2}, {"type":"bonus_delivery","x":3,"y":3},
              {"type":"max_parcel_reward","value":10},   // don't PICK UP parcels worth > value
-             {"type":"max_deliver_reward","value":10} ],// DELIVERING a parcel worth > value scores 0 → deliver only parcels <= value
+             {"type":"max_deliver_reward","value":10} ],// DELIVERING a parcel worth > value scores 0 -> deliver only parcels <= value
   "validity": { "scope": "match" },   // default = whole game; or {"scope":"until_signal","match":"green light"} / {"scope":"duration_ms","ms":30000}
 
   // family "reactive": conditional/temporal behaviour driven by signals/messages
@@ -949,15 +949,15 @@ CRITICAL RULES:
 - family "ignore" ONLY when the negative reward is the consequence of DOING the
   action (a self-defeating trap) AND there is no obligation. If the penalty is
   for NOT complying (e.g. "lose 1000pts unless you stop/avoid/wait") it is NOT
-  ignore — it is "rule" or "reactive". When in doubt, DO NOT ignore.
+  ignore - it is "rule" or "reactive". When in doubt, DO NOT ignore.
 - "don't / avoid / never cross / never go to X", "stacks of N", "every time",
-  "from now on" → family "rule".
-- MULTI-AGENT cooperation → family "coordinate":
-  - "move BOTH/ALL agents near (x,y) … wait for each other" → kind "rendezvous".
-  - "parcel picked up by one agent and delivered by the OTHER agent" → kind "relay".
+  "from now on" -> family "rule".
+- MULTI-AGENT cooperation -> family "coordinate":
+  - "move BOTH/ALL agents near (x,y) ... wait for each other" -> kind "rendezvous".
+  - "parcel picked up by one agent and delivered by the OTHER agent" -> kind "relay".
   - "ALL agents move to an odd/even row and wait for our message / red light green
-    light" → kind "red_light" (this overrides the single-agent "reactive" case).
-- "stop and wait for a message/signal", "red light / green light" (single agent) → "reactive".
+    light" -> kind "red_light" (this overrides the single-agent "reactive" case).
+- "stop and wait for a message/signal", "red light / green light" (single agent) -> "reactive".
 
 Examples:
 Mission: "Calcola 5*5"
@@ -1026,7 +1026,7 @@ function parseIntentJson(text) {
 }
 
 /**
- * Chiama l'LLM una volta per CAPIRE la missione → intento JSON strutturato.
+ * Chiama l'LLM una volta per CAPIRE la missione -> intento JSON strutturato.
  * @returns {Promise<object|null>} intento normalizzato, o null se non interpretabile
  */
 async function understandMission(missionText, beliefs, tools) {
@@ -1045,7 +1045,7 @@ async function understandMission(missionText, beliefs, tools) {
     return intent;
 }
 
-// Coordinata [x,y] o {x,y} → stringa "x,y" (null se non valida).
+// Coordinata [x,y] o {x,y} -> stringa "x,y" (null se non valida).
 function coordStr(at) {
     if (Array.isArray(at) && at.length >= 2 && at[0] != null && at[1] != null)
         return `${Math.round(at[0])},${Math.round(at[1])}`;
@@ -1054,7 +1054,7 @@ function coordStr(at) {
     return null;
 }
 
-// Tra più candidati, scegli il più vicino a me. Ritorna [x,y] o null.
+// Tra piu candidati, scegli il piu vicino a me. Ritorna [x,y] o null.
 function nearestCandidate(cands, me) {
     const m = me ?? { x: 0, y: 0 };
     let best = null, bestD = Infinity;
@@ -1111,12 +1111,12 @@ function compileIntent(intent, beliefs) {
         for (const r of rules) if (r && typeof r === 'object') push('set_rule', JSON.stringify(r));
         const scope = intent.validity?.scope;
         if (scope && scope !== 'match') {
-            console.warn(`[LLM-UNDERSTAND] validità '${scope}' non auto-applicata nel nucleo: la regola resta persistente (no auto-scadenza).`);
+            console.warn(`[LLM-UNDERSTAND] validita '${scope}' non auto-applicata nel nucleo: la regola resta persistente (no auto-scadenza).`);
         }
         return { steps };
     }
 
-    // ignore / reactive → nessuno step (gestiti a monte in runMission)
+    // ignore / reactive -> nessuno step (gestiti a monte in runMission)
     return { steps };
 }
 
@@ -1146,7 +1146,7 @@ async function generatePlan(missionText, beliefs, tools) {
 // ── FASE 2: EXECUTION DI UN SINGOLO STEP (nessuna chiamata LLM) ───────────────
 
 /**
- * Esegue un singolo step del piano traducendolo in una (o più) tool call.
+ * Esegue un singolo step del piano traducendolo in una (o piu) tool call.
  * Non chiama l'LLM.
  * @param {object} step - {action, target}
  * @param {object} ctx
@@ -1213,12 +1213,12 @@ async function executeStep(step, ctx, signal = null) {
                 const c = parseCoords(target);        // coordinate esplicite dal testo?
                 if (!c) {
                     // Target simbolico ("nearest"/vuoto/acquire): ricerca PERSISTENTE
-                    // (ruota spawn tile + aspetta gli spawn) finché non porta un pacco
-                    // o finché la missione viene interrotta. Niente più resa al primo
+                    // (ruota spawn tile + aspetta gli spawn) finche non porta un pacco
+                    // o finche la missione viene interrotta. Niente piu resa al primo
                     // controllo a vuoto.
                     return await acquireParcelPersistent(ctx, signal);
                 }
-                // Coordinate esplicite: pacco SPECIFICO → prova-e-fallisci.
+                // Coordinate esplicite: pacco SPECIFICO -> prova-e-fallisci.
                 const nav = await tools.navigate_to(`${c.x},${c.y}`);
                 if (isErr(nav)) return fail(nav);
                 const pick = await tools.pickup();
@@ -1239,17 +1239,17 @@ async function executeStep(step, ctx, signal = null) {
                 if (isErr(nav)) return fail(nav);
                 // Durante il tragitto (e soprattutto arrivando sulla delivery tile)
                 // `opportunisticActions` consegna automaticamente i pacchi. Quindi
-                // se portavo qualcosa e ora non porto più, LA CONSEGNA È AVVENUTA:
-                // è un SUCCESSO, non "Niente da consegnare". (Era questo il bug del
+                // se portavo qualcosa e ora non porto piu, LA CONSEGNA E AVVENUTA:
+                // e un SUCCESSO, non "Niente da consegnare". (Era questo il bug del
                 // "lo fa ma pensa di non averlo fatto".)
                 const carriedNow = beliefs.carriedParcels?.length ?? 0;
                 if (carriedBefore > 0 && carriedNow === 0) {
-                    console.log(`[LLM-EXEC] consegna già avvenuta arrivando a (${c.x},${c.y}): ${carriedBefore} pacchi`);
+                    console.log(`[LLM-EXEC] consegna gia avvenuta arrivando a (${c.x},${c.y}): ${carriedBefore} pacchi`);
                     return ok(`${nav}; consegnati ${carriedBefore} pacchi (arrivando a destinazione)`);
                 }
                 const drop = await tools.putdown();
                 if (/Niente da consegnare/i.test(drop)) {
-                    // Non portavo nulla all'inizio e niente da consegnare → vero fallimento.
+                    // Non portavo nulla all'inizio e niente da consegnare -> vero fallimento.
                     return fail(`${nav}; ma ${drop}`);
                 }
                 return ok(`${nav}; ${drop}`);
@@ -1276,7 +1276,7 @@ async function executeStep(step, ctx, signal = null) {
 /**
  * Chiama l'LLM per correggere il piano quando uno step fallisce. Restituisce il
  * piano RIVISTO per i passi rimanenti (dal passo fallito in poi), senza
- * rigenerare quelli già completati.
+ * rigenerare quelli gia completati.
  * @param {string} missionText
  * @param {{steps: Array}} originalPlan
  * @param {number} failedStepIndex   indice 0-based del passo fallito
@@ -1321,7 +1321,7 @@ async function reflectOnError(missionText, originalPlan, failedStepIndex, error,
 /**
  * Costruisce il messaggio user statico che traccia il progresso. Si aggiorna
  * in-place ad ogni step (non si aggiungono nuovi elementi all'array messages),
- * così il context resta costante.
+ * cosi il context resta costante.
  * @param {string} missionText
  * @param {{lastAction, lastOutcome, completedSteps, totalSteps}} state
  * @param {object} beliefs
@@ -1345,7 +1345,7 @@ function buildStatefulUserMessage(missionText, state, beliefs) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RUN MISSION — orchestrazione Planning → Execution → (Reflection) → Completion
+// RUN MISSION - orchestrazione Planning -> Execution -> (Reflection) -> Completion
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1358,7 +1358,7 @@ function buildStatefulUserMessage(missionText, state, beliefs) {
 // Configura un task cooperativo di livello 3 (rendezvous / staffetta / red-light)
 // e ritorna subito. Il movimento vero lo fa il loop BDI via beliefs.coord.
 function handleCoordinate(intent) {
-    // 'reactive' (freeze until message) = variante single-agent → freeze sul posto.
+    // 'reactive' (freeze until message) = variante single-agent -> freeze sul posto.
     if (intent.family === 'reactive') {
         const msg = startFreezeInPlace();
         console.log(`[LLM-COORD] ${msg}`);
@@ -1372,7 +1372,7 @@ function handleCoordinate(intent) {
             const at = Array.isArray(c.at) ? c.at : [];
             const x = Number(at[0]), y = Number(at[1]);
             if (!Number.isFinite(x) || !Number.isFinite(y)) {
-                console.log('[LLM-COORD] rendezvous senza coordinate valide → ignoro');
+                console.log('[LLM-COORD] rendezvous senza coordinate valide -> ignoro');
                 return 'Coordinate rendezvous mancanti';
             }
             const maxDist = Number.isFinite(c.maxDist) ? c.maxDist : 3;
@@ -1403,7 +1403,7 @@ async function runMission(missionText, ctx, signal = null) {
     // Risultato dell'ultimo calculate, condiviso tra gli step (per "answer: result").
     ctx._lastCalcResult = null;
 
-    // STATE TRACKER — NON viene aggiunto ai messages, traccia solo il progresso.
+    // STATE TRACKER - NON viene aggiunto ai messages, traccia solo il progresso.
     const state = {
         lastAction:     null,
         lastOutcome:    null,
@@ -1416,7 +1416,7 @@ async function runMission(missionText, ctx, signal = null) {
         return null;
     }
 
-    // FASE 0: COMPRENSIONE (query rewriting → intento JSON strutturato).
+    // FASE 0: COMPRENSIONE (query rewriting -> intento JSON strutturato).
     // Capisce COSA fare e in che ORDINE; la decisione "saltare o no" sta SOLO
     // qui (option b), non nella coda.
     let intent = null;
@@ -1427,9 +1427,9 @@ async function runMission(missionText, ctx, signal = null) {
     }
 
     if (intent) {
-        console.log(`[LLM-UNDERSTAND] family=${intent.family}${intent.reason ? ` — ${intent.reason}` : ''}`);
+        console.log(`[LLM-UNDERSTAND] family=${intent.family}${intent.reason ? ` - ${intent.reason}` : ''}`);
         if (intent.family === 'ignore') {
-            // Unico caso di scarto: trappola auto-lesiva (penalità per AVERLA fatta).
+            // Unico caso di scarto: trappola auto-lesiva (penalita per AVERLA fatta).
             console.log('[LLM] Missione IGNORATA (trappola auto-lesiva).');
             return `Ignorata: ${intent.reason || 'trappola auto-lesiva'}`;
         }
@@ -1439,9 +1439,9 @@ async function runMission(missionText, ctx, signal = null) {
             // coda) esegue l'override / il freeze via beliefs.coord.
             return handleCoordinate(intent);
         }
-        // SAFETY NET deterministico: un'azione ATOMICA con reward NEGATIVO è una
-        // trappola auto-lesiva (penalità per AVERLA fatta) → non eseguirla, anche
-        // se l'LLM l'ha classificata "atomic". Le penalità-OBBLIGO sono regole
+        // SAFETY NET deterministico: un'azione ATOMICA con reward NEGATIVO e una
+        // trappola auto-lesiva (penalita per AVERLA fatta) -> non eseguirla, anche
+        // se l'LLM l'ha classificata "atomic". Le penalita-OBBLIGO sono regole
         // (family 'rule') o reattive, gestite sopra: questo colpisce solo le
         // azioni una-tantum che fanno solo perdere punti.
         if (intent.family === 'atomic') {
@@ -1451,9 +1451,9 @@ async function runMission(missionText, ctx, signal = null) {
                 return `Ignorata: trappola auto-lesiva (reward ${r})`;
             }
         }
-        // SAFETY NET: una REGOLA con moltiplicatore < 1 è DANNOSA (seguirla
+        // SAFETY NET: una REGOLA con moltiplicatore < 1 e DANNOSA (seguirla
         // ridurrebbe il reward, es. "stacks of 3 to get 0.3 times the reward").
-        // Non la installiamo. I moltiplicatori ≥ 1 (double/triple/2x) restano.
+        // Non la installiamo. I moltiplicatori >= 1 (double/triple/2x) restano.
         if (intent.family === 'rule') {
             const mult = extractMultiplier(missionText);
             if (mult != null && mult < 1) {
@@ -1463,15 +1463,15 @@ async function runMission(missionText, ctx, signal = null) {
         }
     }
 
-    // FASE 1: PIANO — deterministico dall'intento; fallback al planner LLM
-    // (generatePlan) se la comprensione non è utilizzabile.
+    // FASE 1: PIANO - deterministico dall'intento; fallback al planner LLM
+    // (generatePlan) se la comprensione non e utilizzabile.
     let plan;
     const compiled = intent ? compileIntent(intent, ctx.beliefs) : { steps: [] };
     if (compiled.steps.length > 0) {
         plan = { steps: compiled.steps, reasoning: intent.reason || '' };
         console.log(`[LLM] Intento compilato in ${plan.steps.length} steps (family=${intent.family})`);
     } else {
-        console.log('[LLM] Comprensione non utilizzabile → fallback al planner LLM');
+        console.log('[LLM] Comprensione non utilizzabile -> fallback al planner LLM');
         try {
             plan = await generatePlan(missionText, ctx.beliefs, tools);
         } catch (e) {
@@ -1486,15 +1486,15 @@ async function runMission(missionText, ctx, signal = null) {
         return null;
     }
 
-    // MESSAGES ARRAY — SEMPRE 2 elementi [system, user], state-based.
+    // MESSAGES ARRAY - SEMPRE 2 elementi [system, user], state-based.
     const messages = [
         { role: 'system', content: prompt },
         { role: 'user',   content: buildStatefulUserMessage(missionText, state, ctx.beliefs) },
     ];
 
     // FASE 2: EXECUTION LOOP (nessuna chiamata LLM, solo tool call).
-    // Indice esplicito invece di for...of: così la reflection può rimpiazzare
-    // gli step rimanenti e si può ri-tentare dallo stesso indice.
+    // Indice esplicito invece di for...of: cosi la reflection puo rimpiazzare
+    // gli step rimanenti e si puo ri-tentare dallo stesso indice.
     let reflections = 0;
     let i = 0;
     while (i < plan.steps.length) {
@@ -1504,7 +1504,7 @@ async function runMission(missionText, ctx, signal = null) {
         }
 
         const step = plan.steps[i];
-        console.log(`[LLM-EXEC] Step ${i + 1}/${plan.steps.length}: ${step.action} → ${step.target}`);
+        console.log(`[LLM-EXEC] Step ${i + 1}/${plan.steps.length}: ${step.action} -> ${step.target}`);
 
         let outcome;
         try {
@@ -1514,21 +1514,21 @@ async function runMission(missionText, ctx, signal = null) {
         }
 
         if (!outcome.success) {
-            // Se è stato l'abort della coda (es. durante un acquire persistente),
+            // Se e stato l'abort della coda (es. durante un acquire persistente),
             // esci pulito SENZA sprecare una reflection.
             if (signal?.aborted) {
                 console.log('[LLM] Interruzione durante execution (acquire/step)');
                 return null;
             }
-            console.log(`[LLM-EXEC] ✗ Errore: ${outcome.error}`);
+            console.log(`[LLM-EXEC] X Errore: ${outcome.error}`);
 
             if (reflections >= MAX_REFLECTIONS) {
-                console.error(`[LLM-REFLECTION] budget esaurito (${MAX_REFLECTIONS}) — missione fallita`);
+                console.error(`[LLM-REFLECTION] budget esaurito (${MAX_REFLECTIONS}) - missione fallita`);
                 return null;
             }
             reflections++;
 
-            // FASE 3: REFLECTION — correggi il piano dal passo fallito in poi.
+            // FASE 3: REFLECTION - correggi il piano dal passo fallito in poi.
             let revised;
             try {
                 revised = await reflectOnError(
@@ -1539,7 +1539,7 @@ async function runMission(missionText, ctx, signal = null) {
                 return null;
             }
             if (revised.steps.length === 0) {
-                console.error('[LLM-REFLECTION] piano rivisto vuoto — missione fallita');
+                console.error('[LLM-REFLECTION] piano rivisto vuoto - missione fallita');
                 return null;
             }
 
@@ -1556,11 +1556,11 @@ async function runMission(missionText, ctx, signal = null) {
         state.completedSteps = i + 1;
         messages[1].content  = buildStatefulUserMessage(missionText, state, ctx.beliefs);
 
-        console.log(`[LLM-EXEC] ✓ Completato: ${outcome.outcome}`);
+        console.log(`[LLM-EXEC] OK Completato: ${outcome.outcome}`);
         i++;
     }
 
-    console.log(`[LLM] ✓ Missione completata: ${state.completedSteps} steps eseguiti`);
+    console.log(`[LLM] OK Missione completata: ${state.completedSteps} steps eseguiti`);
     return `Missione completata: ${state.completedSteps}/${state.totalSteps} steps`;
 }
 
@@ -1578,7 +1578,7 @@ function isProtocolMessage(text) {
     if (/^\[[A-Z_0-9-]+\]/i.test(t)) return true;
     // PROTOCOLLO v1, NAME_LIKE v2 (token tutto-MAIUSCOLE + "v<n>")
     if (/^[A-Z][A-Z_0-9]{2,}\s+v\d+\b/.test(t)) return true;
-    // Inizia con un blob JSON puro (oggetto/array) — non è linguaggio naturale
+    // Inizia con un blob JSON puro (oggetto/array) - non e linguaggio naturale
     if (/^[\{\[]/.test(t)) return true;
     // Prefissi noti di team coord
     if (/^(ASA[_-]?COORD|TEAM[_-]?MSG|MAGNAGATTI|HELLOTEAM|HELLO\s)/i.test(t)) return true;
@@ -1587,7 +1587,7 @@ function isProtocolMessage(text) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. ENTRY POINT — collega l'agente al socket e ascolta le special missions
+// 5. ENTRY POINT - collega l'agente al socket e ascolta le special missions
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1596,7 +1596,7 @@ function isProtocolMessage(text) {
  * @param {{navigateTo:Function, getPddlPlan?:Function}} deps  i tuoi piani
  */
 export function startLlmAgent(socket, beliefs, deps) {
-    // ctx è condiviso tra le missioni: la queue ne aggiorna `lastSender` prima
+    // ctx e condiviso tra le missioni: la queue ne aggiorna `lastSender` prima
     // di ogni esecuzione, e il tool `answer` lo legge per rispondere al mittente.
     const ctx = { socket, beliefs, deps, lastSender: null };
 
@@ -1615,9 +1615,9 @@ export function startLlmAgent(socket, beliefs, deps) {
     });
 
     // Ascolto chat: SOLO lettura, nessun handshake.
-    // Ogni messaggio plausibile come missione viene messo in coda con priorità.
+    // Ogni messaggio plausibile come missione viene messo in coda con priorita.
     socket.onMsg((id, name, msg) => {
-        // Una missione è una stringa o un oggetto {mission:'...'} / {text:'...'}.
+        // Una missione e una stringa o un oggetto {mission:'...'} / {text:'...'}.
         // Tutto il resto (payload strutturati interni) viene ignorato.
         let text = null;
         if (typeof msg === 'string') text = msg;
@@ -1627,19 +1627,19 @@ export function startLlmAgent(socket, beliefs, deps) {
 
         // Filtro: scarta i messaggi di coordinamento di altri team (i loro
         // agenti shoutano protocolli tipo "ASA_COORD v1 ...", "[HELLOTEAM]:..."
-        // — non sono missioni del prof e ci farebbero solo perdere tempo.
+        // - non sono missioni del prof e ci farebbero solo perdere tempo.
         if (isProtocolMessage(text)) {
-            console.log(`[LLM] ignoro protocollo da ${name} (${id}): "${text.slice(0, 60)}${text.length>60?'…':''}"`);
+            console.log(`[LLM] ignoro protocollo da ${name} (${id}): "${text.slice(0, 60)}${text.length>60?'...':''}"`);
             return;
         }
 
         // Accetta missioni SOLO dall'admin
         if (name.toLowerCase() !== 'admin' && name.toLowerCase() !== 'lara') {
-            console.log(`[LLM] ignoro messaggio da ${name} (${id}): non è admin`);
+            console.log(`[LLM] ignoro messaggio da ${name} (${id}): non e admin`);
             return;
         }
 
-        // Se è in corso un red-light, "green"/"red" dall'admin sono SEGNALI di
+        // Se e in corso un red-light, "green"/"red" dall'admin sono SEGNALI di
         // via-libera/stop (relay al team), non nuove missioni.
         if (maybeHandleAdminSignal(text)) {
             console.log(`[LLM] segnale red-light da ${name}: "${text}"`);
@@ -1650,12 +1650,12 @@ export function startLlmAgent(socket, beliefs, deps) {
         enqueue(text, id);
     });
 
-    console.log('[LLM] Avviato — coda missioni attiva, in ascolto chat');
+    console.log('[LLM] Avviato - coda missioni attiva, in ascolto chat');
 }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Export interni — utili per test e debug. Non cambiano il comportamento del
+// Export interni - utili per test e debug. Non cambiano il comportamento del
 // modulo (startLlmAgent resta l'entry point usato da llm_main.js).
 // ─────────────────────────────────────────────────────────────────────────────
 export {
