@@ -125,11 +125,22 @@ export function onTeamMessage(type, cb) {
 // INVIO
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Manda a tutti gli alleati (shout filtrato per team) */
+/**
+ * Manda a TUTTI gli alleati noti, in modo PRIVATO (emitSay diretto a ciascuno):
+ * gli altri giocatori NON vedono il messaggio. Se non conosco ancora nessun
+ * alleato (handshake non completato) ripiego sullo shout, cosi il primo
+ * messaggio non va perso (di fatto succede solo prima dell'hello reciproco).
+ */
 export function broadcast(type, payload) {
     if (!_socket) { dbg(`[WARN] broadcast '${type}' ignorato: socket non inizializzato`); return; }
-    dbg(`-> broadcast '${type}' (team=${teamId() || '??'})`);
-    _socket.emitShout({ teamId: teamId(), type, payload });
+    const mates = [..._teammates];
+    if (mates.length === 0) {
+        dbg(`-> shout '${type}' (nessun alleato noto ancora: fallback visibile)`);
+        _socket.emitShout({ teamId: teamId(), type, payload });
+        return;
+    }
+    dbg(`-> '${type}' privato a ${mates.length} alleato/i`);
+    for (const id of mates) _socket.emitSay(id, { teamId: teamId(), type, payload });
 }
 
 /** Manda a un alleato specifico */

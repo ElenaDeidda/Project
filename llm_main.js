@@ -321,7 +321,7 @@ socket.onSensing(async (s) => {
     if (bdiPaused) return;
     if (beliefs.coord?.frozen)   { agent.stop(); return; }            // red light
     if (beliefs.coord?.override) { agent.push(beliefs.coord.override); return; } // rendezvous/staffetta
-    if (beliefs.coord?.role === 'postman') { agent.stop(); return; }  // postino dedicato: aspetta handover
+    // Postino: finche' NON c'e' un handover gioca normalmente da BDI.
     const predicate = relayInterceptDeliver(applyRulesToPredicate(deliberate(generateOptions())));
     logPredicateIfChanged(predicate);
     agent.push(predicate);
@@ -370,8 +370,6 @@ while (true) {
             agent.stop();                                            // red light
         } else if (beliefs.coord?.override) {
             agent.push(beliefs.coord.override);                      // rendezvous/staffetta
-        } else if (beliefs.coord?.role === 'postman') {
-            agent.stop();                                            // postino dedicato: aspetta handover
         } else {
             const predicate = relayInterceptDeliver(applyRulesToPredicate(deliberate(generateOptions())));
             logPredicateIfChanged(predicate);
