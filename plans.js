@@ -343,33 +343,43 @@ export class RelayFetch extends PlanBase {
         // dal raccoglitore, quindi punto alla tile RAGGIUNGIBILE piu' vicina ad essa
         // (un'adiacente, o la piu' vicina possibile) e di li' segnalo "pronto".
         const spot = nearestReachableWithinDist(H, 1);
-        console.log(`[COORD] RelayFetch: mi avvicino a handover (${x},${y}) via (${spot.x},${spot.y})`);
+        const me0 = `(${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`;
+        console.log(`[COORD] RelayFetch: FASE1 da ${me0} -> avvicino a (${spot.x},${spot.y}), adiacente a handover (${x},${y})`);
         const nav = await navigateTo(beliefs.me, spot, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso handover (${x},${y})`];
+        console.log(`[COORD] RelayFetch: FASE1 arrivato a (${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)}) -> segnalo "pronto" e aspetto il drop`);
 
         notifyPostmanReady();
         const ok = await waitUntil(() => wasDropped(), this.shouldStop, 60000);
         if (this.stopped) throw ['stopped'];
-        if (!ok) console.warn('[COORD] RelayFetch: timeout attesa drop del raccoglitore');
+        if (!ok) console.warn('[COORD] RelayFetch: timeout (60s) attesa drop del raccoglitore');
+        else console.log('[COORD] RelayFetch: FASE2 il raccoglitore ha mollato -> entro sulla tile di handover');
 
         // Il raccoglitore ha lasciato i pacchi e si sta spostando: entro sulla
-        // tile di handover (riprovo finche la libera) e raccolgo.
-        for (let k = 0; k < 10 && !this.stopped; k++) {
+        // tile di handover (riprovo finche la libera) e raccolgo. Logghiamo OGNI
+        // tentativo: se va "avanti e indietro" qui si vede perche' (tile ancora
+        // occupata dal raccoglitore che non si e' ancora spostato).
+        let onH = false;
+        for (let k = 0; k < 15 && !this.stopped; k++) {
             const r = await navigateTo(beliefs.me, H, this.#socket, beliefs.mapTiles, this.shouldStop);
-            if (r === 'reached') break;
+            const at = `(${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`;
+            if (r === 'reached') { onH = true; console.log(`[COORD] RelayFetch: FASE2 sulla tile handover ${at} (tentativo ${k + 1})`); break; }
             if (r === 'stopped') throw ['stopped'];
+            console.log(`[COORD] RelayFetch: FASE2 tentativo ${k + 1}: nav=${r}, sono a ${at}, la tile (${x},${y}) e' ancora occupata -> riprovo`);
             await new Promise(res => setTimeout(res, 200));
         }
+        if (!onH) console.warn(`[COORD] RelayFetch: non sono riuscito a salire su (${x},${y}) dopo 15 tentativi -> provo a raccogliere comunque`);
         const picked = await this.#socket.emitPickup();
         if (picked && picked.length) {
             beliefs.carrying = true;
             beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
         }
-        console.log(`[COORD] RelayFetch: raccolti ${picked?.length ?? 0} pacchi -> consegno`);
+        console.log(`[COORD] RelayFetch: FASE3 raccolti ${picked?.length ?? 0} pacchi -> vado a consegnare`);
 
         const target = nearestDeliveryPoint();
         if (target) {
+            console.log(`[COORD] RelayFetch: FASE3 consegno a (${target.x},${target.y})`);
             const dn = await navigateTo(beliefs.me, target, this.#socket, beliefs.mapTiles, this.shouldStop);
             if (dn === 'stopped') throw ['stopped'];
             const dids = deliverableIds(beliefs);
@@ -379,6 +389,8 @@ export class RelayFetch extends PlanBase {
                 beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
                 beliefs.carrying = beliefs.carriedParcels.length > 0;
             }
+        } else {
+            console.warn('[COORD] RelayFetch: nessun delivery point raggiungibile!');
         }
         beliefs.coord._handover = null;
         beliefs.coord._dropped  = false;
