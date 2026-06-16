@@ -189,6 +189,9 @@ async function opportunisticActions(me, socket) {
 
     // Delivery: sono su una delivery tile con pacchi in mano?
     if (beliefs.carrying || beliefs.carriedParcels.length > 0) {
+        // Staffetta: il RACCOGLITORE non consegna MAI da solo (passa dal postino),
+        // altrimenti il bonus "preso da uno, consegnato dall'altro" non scatta.
+        if (beliefs.coord?.role === 'collector') return;
         const onDelivery = beliefs.deliveryPoints.some(d => d.x === x && d.y === y);
         if (onDelivery) {
             // stack_size puro: NON consegno un parziale mentre passo (aspetto di

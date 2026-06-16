@@ -301,7 +301,15 @@ export class RelayDrop extends PlanBase {
         if (this.stopped) throw ['stopped'];
         if (!ready) console.warn('[COORD] RelayDrop: timeout attesa postino - lascio comunque');
 
-        const dropIds = (Array.isArray(ids) && ids.length) ? ids : deliverableIds(beliefs);
+        // Mollo i pacchi REALMENTE in mano adesso (lista fresca, non quella
+        // catturata all'avvio: evita drop "a vuoto" se il carico e' cambiato).
+        const dropIds = beliefs.carriedParcels.map(p => p.id);
+        if (dropIds.length === 0) {
+            console.warn('[COORD] RelayDrop: niente in mano da lasciare - annullo handover');
+            notifyDropped();          // sblocca comunque il postino (non resta appeso)
+            clearOverride();
+            return true;
+        }
         const dropped = await this.#socket.emitPutdown(dropIds);
         const set = new Set(dropIds);
         beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
