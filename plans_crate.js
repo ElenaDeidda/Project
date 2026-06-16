@@ -12,6 +12,7 @@
 
 import { beliefs, haltAgent } from './beliefs.js'; // FIX: import haltAgent per il deadlock check
 import { execCratePlan }      from './pddl_crates.js';
+import { navigateTo }         from './moves.js'; // FIX: import per fallback A* prima del halt definitivo
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,6 +65,28 @@ export class GoPickUpCrate extends PlanBase {
 
         const arrived = await execCratePlan(beliefs, this.#socket, x, y, this.shouldStop);
         if (!arrived) {
+            // FIX: try A* before marking as permanently unreachable
+            const navResult = await navigateTo(
+                beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop
+            );
+            if (navResult === 'stopped') throw ['stopped'];
+            if (navResult === 'reached') {
+                console.log(`[CRATE] A* raggiunto (${x},${y}) senza PDDL — path libero`);
+                if (beliefs.carriedParcels.some(p => p.id === id)) return true;
+
+                const freshParcel = beliefs.parcels.get(id);
+                if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito durante navigazione`];
+
+                const picked = await this.#socket.emitPickup();
+                if (!picked || picked.length === 0) throw [`Pickup vuoto in (${x},${y})`];
+
+                beliefs.carrying       = true;
+                beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
+                console.log(`[CRATE_PLANS] Raccolti ${picked.length} pacchi`);
+                return true;
+            }
+            // navResult === 'failed' → crates still block the path, fall through to mark unreachable
+
             // FIX: BUG 1 — registra subito il target come irraggiungibile e
             // verifica se TUTTI i pacchi noti sono ora irraggiungibili → halt totale
             beliefs.unreachableCrateTargets.add(`${Math.round(x)}_${Math.round(y)}`);
@@ -154,6 +177,17 @@ export class GoToSpawnCrate extends PlanBase {
 
         const arrived = await execCratePlan(beliefs, this.#socket, x, y, this.shouldStop);
         if (!arrived) {
+            // FIX: try A* before marking as permanently unreachable
+            const navResult = await navigateTo(
+                beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop
+            );
+            if (navResult === 'stopped') throw ['stopped'];
+            if (navResult === 'reached') {
+                console.log(`[CRATE] A* raggiunto (${x},${y}) senza PDDL — path libero`);
+                return true;
+            }
+            // navResult === 'failed' → crates still block the path, fall through to mark unreachable
+
             // FIX: BUG 1 — registra subito il target come irraggiungibile e
             // verifica se TUTTE le spawn tile note sono ora irraggiungibili → halt totale
             beliefs.unreachableCrateTargets.add(`${Math.round(x)}_${Math.round(y)}`);
