@@ -2,6 +2,7 @@ import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
 import { beliefs, updateConfig, updateMap, updateSensing, updateCrates } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
+import { formatMap }                  from './beliefs.js';
 import dotenv from 'dotenv';
 import fs from 'fs';
 
@@ -128,6 +129,7 @@ socket.onSensing( (s) => {
     agent.push( deliberate( generateOptions() ) );
 });
 
+console.log(formatMap(beliefs));
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
 // Utile quando un pacco sparisce per timer (non arriva nessun sensing)
 while (!beliefs.halted) {
