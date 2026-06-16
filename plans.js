@@ -370,12 +370,15 @@ export class RelayFetch extends PlanBase {
             await new Promise(res => setTimeout(res, 200));
         }
         if (!onH) console.warn(`[COORD] RelayFetch: non sono riuscito a salire su (${x},${y}) dopo 15 tentativi -> provo a raccogliere comunque`);
+        // Nota: salendo sulla tile l'opportunistic pickup puo' aver gia' raccolto
+        // i pacchi, quindi questo emitPickup esplicito spesso torna 0: e' normale.
         const picked = await this.#socket.emitPickup();
         if (picked && picked.length) {
             beliefs.carrying = true;
             beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
         }
-        console.log(`[COORD] RelayFetch: FASE3 raccolti ${picked?.length ?? 0} pacchi -> vado a consegnare`);
+        const inHand = beliefs.carriedParcels.length;
+        console.log(`[COORD] RelayFetch: FASE3 ho ${inHand} pacchi in mano (emitPickup esplicito: ${picked?.length ?? 0}) -> vado a consegnare`);
 
         const target = nearestDeliveryPoint();
         if (target) {
