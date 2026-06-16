@@ -18,10 +18,25 @@ export const beliefs = {
     // per ogni spawn tile "x_y" → quante spawn tiles sono visibili da quel punto
     spawnVisibility: new Map(),
 
+    // "x_y" → target per cui il solver PDDL ha confermato che non esiste
+    // nessun piano (mappa con casse) — esclusi in modo permanente dalle opzioni.
+    unreachableCrateTargets: new Set(),
+
+    // true quando per NESSUN target esiste un piano possibile: l'agente
+    // smette di deliberare (vedi haltAgent()).
+    halted: false,
 };
 
 export function updateConfig(config) {
     beliefs.config = config;
+}
+
+// Ferma definitivamente la deliberazione dell'agente: nessun target è
+// raggiungibile su questa mappa con la configurazione attuale delle casse.
+export function haltAgent(reason) {
+    if (beliefs.halted) return;
+    beliefs.halted = true;
+    console.error(`[BDI] ESECUZIONE BLOCCATA — ${reason}`);
 }
 
 export function updateMap(width, height, tiles) {

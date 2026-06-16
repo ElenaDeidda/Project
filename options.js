@@ -1,5 +1,5 @@
 // options.js — Generazione opzioni e deliberazione
-import { beliefs, getAgentPositions, getBlockedCells } from './beliefs.js';
+import { beliefs, getAgentPositions, getBlockedCells, haltAgent } from './beliefs.js';
 import { scoreParcel, nearestDeliveryDist, parseIntervalMs }  from './basic_functions.js';
 import { reachableDistances } from './moves.js';
 
@@ -249,6 +249,10 @@ function buildPickupOptions(agentPositions, dist) {
         const key = `${Math.round(parcel.x)}_${Math.round(parcel.y)}`;
         if (blocked.has(key)) continue;
 
+        // Il solver PDDL ha già confermato che non esiste un piano per questo
+        // punto (mappa con casse) → escluso in modo permanente
+        if (beliefs.unreachableCrateTargets.has(key)) continue;
+
         // Distanza REALE di percorso: se irraggiungibile (muri/nemici) → scarta
         const rd = realDist(dist, parcel.x, parcel.y);
         if (!Number.isFinite(rd)) continue;
@@ -276,6 +280,11 @@ function buildDeliverOptions(dist) {
         // delivery raggiungibile invece di andare in loop su uno irraggiungibile.
         const d = realDist(dist, dp.x, dp.y);
         if (!Number.isFinite(d)) continue;
+
+        // Escluso in modo permanente: il solver PDDL ha già confermato che
+        // non esiste un piano per raggiungere questo delivery point
+        if (beliefs.unreachableCrateTargets.has(`${Math.round(dp.x)}_${Math.round(dp.y)}`)) continue;
+
         options.push(['deliver', dp.x, dp.y, d]);
     }
     return options;
@@ -330,6 +339,10 @@ function buildSpawnOptions(agentPositions, dist) {
             if (tile.type !== '1') continue;
             if (blocked.has(key)) continue;          // tile occupata da un agente
 
+            // Escluso in modo permanente: il solver PDDL ha già confermato
+            // che non esiste un piano per raggiungere questa spawn tile
+            if (beliefs.unreachableCrateTargets.has(key)) continue;
+
             const [x, y] = key.split('_').map(Number);
 
             // Esclude le tile dentro una zona esausta (raggio = observation_distance)
@@ -374,6 +387,8 @@ function buildSpawnOptions(agentPositions, dist) {
  *   - Altrimenti               → opzioni 'go_pick_up' + 'go_to_spawn'
  */
 export function generateOptions() {
+    if (beliefs.halted) return [];
+
     // BFS una sola volta: distanze reali di percorso verso tutte le celle,
     // rispettando muri e nemici. Condivisa da delivery / pickup / spawn.
     const dist = reachableDistances(
@@ -384,7 +399,9 @@ export function generateOptions() {
         // In viaggio verso il delivery non siamo "in attesa di spawn":
         // tieni fresca la finestra di pattugliamento.
         lastPickupSeenTime = Date.now();
-        return buildDeliverOptions(dist);
+        const delivers = buildDeliverOptions(dist);
+        checkGlobalDeadlock(delivers);
+        return delivers;
     }
 
     // Non sta portando nulla, OPPURE sta portando ma non ha ancora raggiunto
@@ -396,10 +413,23 @@ export function generateOptions() {
     // C'è almeno un pacco raccoglibile visibile → la zona non è "vuota"
     if (pickups.length > 0) lastPickupSeenTime = Date.now();
 
-    return [
+    const options = [
         ...pickups,
         ...buildSpawnOptions(agentPositions, dist),
     ];
+    checkGlobalDeadlock(options);
+    return options;
+}
+
+// Su una mappa con casse, se non resta NESSUNA opzione percorribile e il
+// solver ha già escluso almeno un target come irrisolvibile, significa che
+// per questa configurazione non esiste alcun piano possibile → blocca tutto.
+function checkGlobalDeadlock(options) {
+    if (!beliefs.isCrateMap) return;
+    if (options.length > 0) return;
+    if (beliefs.unreachableCrateTargets.size === 0) return;
+
+    haltAgent(`nessun piano possibile per nessun target raggiungibile su questa mappa (target esclusi: ${[...beliefs.unreachableCrateTargets].join(', ')})`);
 }
 
 /**

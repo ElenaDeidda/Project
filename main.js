@@ -124,12 +124,13 @@ const { width, height } = await mapReady;
 socket.onSensing( (s) => {
     updateSensing(s);
     updateCrates(s);    // riconcilia posizione casse col server
+    if (beliefs.halted) return;
     agent.push( deliberate( generateOptions() ) );
 });
 
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
 // Utile quando un pacco sparisce per timer (non arriva nessun sensing)
-while (true) {
+while (!beliefs.halted) {
     agent.push( deliberate( generateOptions() ) );
     await new Promise(r => setTimeout(r, 200));
 }

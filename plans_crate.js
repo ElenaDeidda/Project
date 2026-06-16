@@ -126,12 +126,8 @@ export class GoToSpawnCrate extends PlanBase {
         console.log(`[CRATE_PLANS] casse attive: ${[...beliefs.crateTiles.keys()].join(' ')}`);
 
         const arrived = await execCratePlan(beliefs, this.#socket, x, y, this.shouldStop);
-
-        if (!arrived) {
-            console.warn(`[CRATE_PLANS] GoToSpawnCrate: STALLO — nessun piano verso (${x},${y}). Attendo...`);
-            await new Promise(r => setTimeout(r, 1000));
-            return true;   // non throw: lo stallo è gestito aspettando
-        }
+        if (!arrived) throw [`PDDL/A* fallito per GoToSpawnCrate → (${x},${y})`];
+        if (this.stopped) throw ['stopped'];
 
         await new Promise(r => setTimeout(r, 300));
         return true;
