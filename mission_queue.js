@@ -1,27 +1,27 @@
 // mission_queue.js
-// Coda di missioni con priorità per l'agente LLM.
+// Coda di missioni con priorita per l'agente LLM.
 //
 // COMPORTAMENTO:
-//   1. Quando arriva una missione → la valuta (mission_evaluator) e la mette
+//   1. Quando arriva una missione -> la valuta (mission_evaluator) e la mette
 //      in coda. Le trappole vengono scartate subito.
 //   2. Dopo un breve BUFFER (per raccogliere missioni che arrivano in burst)
-//      la coda viene scandita: la missione di priorità maggiore viene eseguita.
-//   3. Mentre eseguo una missione X, se ne arriva una Y con priorità
-//      ≥ X.priority × INTERRUPT_FACTOR, X viene interrotta e parte Y.
-//      Altrimenti Y resta in coda e verrà ripresa dopo.
-//   4. Niente expiry: le missioni restano in coda finché non vengono eseguite
-//      o scartate per invalidità.
-//   5. Prima di eseguire una missione, controllo "isStillValid": se è una
-//      missione di pickup su coordinate dove non c'è più un pacco
-//      (probabilmente l'ha preso un altro agente) → scartata.
+//      la coda viene scandita: la missione di priorita maggiore viene eseguita.
+//   3. Mentre eseguo una missione X, se ne arriva una Y con priorita
+//      >= X.priority × INTERRUPT_FACTOR, X viene interrotta e parte Y.
+//      Altrimenti Y resta in coda e verra ripresa dopo.
+//   4. Niente expiry: le missioni restano in coda finche non vengono eseguite
+//      o scartate per invalidita.
+//   5. Prima di eseguire una missione, controllo "isStillValid": se e una
+//      missione di pickup su coordinate dove non c'e piu un pacco
+//      (probabilmente l'ha preso un altro agente) -> scartata.
 
 import { evaluateMission } from './mission_evaluator.js';
 
 const BUFFER_MS        = 500;   // raccolta-missioni prima di scegliere
-const INTERRUPT_FACTOR = 2.0;   // nuovo deve essere ≥ 2× la corrente per interrompere
+const INTERRUPT_FACTOR = 2.0;   // nuovo deve essere >= 2× la corrente per interrompere
 const TICK_MS          = 100;   // frequenza dello scheduler
 
-// Parole inglesi che indicano "raccogli un pacco" — usate dal check di validità
+// Parole inglesi che indicano "raccogli un pacco" - usate dal check di validita
 const PICKUP_KEYWORDS = /\b(pick\s*up|pickup|take|grab|collect|fetch|retrieve)\b/i;
 
 
@@ -34,7 +34,7 @@ let _running = null;        // {text, senderId, priority, controller}
 let _ticker  = null;
 
 let _beliefs       = null;
-let _runMissionFn  = null;  // (text, senderId, signal) → Promise
+let _runMissionFn  = null;  // (text, senderId, signal) -> Promise
 let _bdiPause      = () => {};
 let _bdiResume     = () => {};
 
@@ -49,7 +49,7 @@ let _bdiResume     = () => {};
  *                               firma: (text, senderId, signal) => Promise
  * @param {Function} [bdiPause]  chiamato PRIMA di eseguire una mission
  *                               (silenzia il loop BDI dell'LLM agent)
- * @param {Function} [bdiResume] chiamato DOPO che la mission è finita
+ * @param {Function} [bdiResume] chiamato DOPO che la mission e finita
  */
 export function initQueue({ beliefs, runMission, bdiPause, bdiResume }) {
     _beliefs       = beliefs;
@@ -62,19 +62,19 @@ export function initQueue({ beliefs, runMission, bdiPause, bdiResume }) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ENQUEUE  — chiamato dall'handler onMsg con il testo della missione
+// ENQUEUE  - chiamato dall'handler onMsg con il testo della missione
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function enqueue(text, senderId) {
     const verdict = evaluateMission(text, _beliefs);
     if (!verdict.worth) {
-        console.log(`[QUEUE] scartata "${text}" — ${verdict.reason}`);
+        console.log(`[QUEUE] scartata "${text}" - ${verdict.reason}`);
         return;
     }
 
-    // "Damping" in base al carico: se sto già trasportando pacchi che valgono
-    // più della mission, abbasso la sua priorità (meglio consegnare prima). MA
-    // SOLO per mission positive normali — MAI per regole/penalità urgenti (vanno
+    // "Damping" in base al carico: se sto gia trasportando pacchi che valgono
+    // piu della mission, abbasso la sua priorita (meglio consegnare prima). MA
+    // SOLO per mission positive normali - MAI per regole/penalita urgenti (vanno
     // installate subito) e mai sotto zero.
     let priority = verdict.priority;
     let reasonExtra = '';
@@ -85,7 +85,7 @@ export function enqueue(text, senderId) {
         if (carriedValue > verdict.reward) {
             const ratio = verdict.reward / Math.max(1, carriedValue);
             const newPri = priority * ratio;
-            reasonExtra = ` | abbasso pri (porto ${Math.round(carriedValue)}pt > ${verdict.reward}pt mission): ${priority.toFixed(2)} → ${newPri.toFixed(2)}`;
+            reasonExtra = ` | abbasso pri (porto ${Math.round(carriedValue)}pt > ${verdict.reward}pt mission): ${priority.toFixed(2)} -> ${newPri.toFixed(2)}`;
             priority = newPri;
         }
     }
@@ -98,12 +98,12 @@ export function enqueue(text, senderId) {
         addedAt: Date.now(),
     };
     _queue.push(entry);
-    console.log(`[QUEUE] +"${text}" (pri=${priority.toFixed(2)}${entry.urgent ? ', URGENTE' : ''}) — ${verdict.reason}${reasonExtra}`);
+    console.log(`[QUEUE] +"${text}" (pri=${priority.toFixed(2)}${entry.urgent ? ', URGENTE' : ''}) - ${verdict.reason}${reasonExtra}`);
 
-    // Interruzione: una mission URGENTE (regola/penalità) interrompe subito la
-    // corrente — a meno che la corrente sia a sua volta urgente (non lasciamo
-    // una regola installata a metà). Le mission normali interrompono solo se
-    // MOLTO più convenienti (≥ INTERRUPT_FACTOR×).
+    // Interruzione: una mission URGENTE (regola/penalita) interrompe subito la
+    // corrente - a meno che la corrente sia a sua volta urgente (non lasciamo
+    // una regola installata a meta). Le mission normali interrompono solo se
+    // MOLTO piu convenienti (>= INTERRUPT_FACTOR×).
     const canInterrupt = _running && !_running.urgent &&
         (entry.urgent || entry.priority >= _running.priority * INTERRUPT_FACTOR);
     if (canInterrupt) {
@@ -114,7 +114,7 @@ export function enqueue(text, senderId) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VALIDITÀ — controllo conservativo, attivo solo per casi OVVII
+// VALIDITA - controllo conservativo, attivo solo per casi OVVII
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -124,13 +124,13 @@ export function enqueue(text, senderId) {
 function isStillValid(mission, beliefs) {
     const text = mission.text || '';
     const m = text.match(/\((\d+)\s*,\s*(\d+)\)/);
-    if (!m) return true;             // niente coord → niente da verificare
+    if (!m) return true;             // niente coord -> niente da verificare
 
     const x = Number(m[1]);
     const y = Number(m[2]);
 
-    // Caso ovvio: pickup-like + coordinate → deve esserci un pacco libero lì.
-    // Tutto il resto (move, drop, generico) → considerato sempre valido.
+    // Caso ovvio: pickup-like + coordinate -> deve esserci un pacco libero li.
+    // Tutto il resto (move, drop, generico) -> considerato sempre valido.
     if (PICKUP_KEYWORDS.test(text)) {
         const parcels = beliefs?.parcels;
         if (!parcels) return true;
@@ -139,7 +139,7 @@ function isStillValid(mission, beliefs) {
                 return true;
             }
         }
-        return false;                // nessun pacco lì → invalida
+        return false;                // nessun pacco li -> invalida
     }
 
     return true;
@@ -147,30 +147,30 @@ function isStillValid(mission, beliefs) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SCHEDULER — gira ogni TICK_MS
+// SCHEDULER - gira ogni TICK_MS
 // ─────────────────────────────────────────────────────────────────────────────
 
 function tick() {
-    if (_running)          return;     // sto già eseguendo
+    if (_running)          return;     // sto gia eseguendo
     if (_queue.length === 0) return;   // nulla da fare
 
-    // Buffer: aspetto che la più vecchia sia in coda da almeno BUFFER_MS,
-    // così se arriva un burst di missioni le valuto tutte insieme.
+    // Buffer: aspetto che la piu vecchia sia in coda da almeno BUFFER_MS,
+    // cosi se arriva un burst di missioni le valuto tutte insieme.
     const oldest = _queue.reduce((a, b) => a.addedAt <= b.addedAt ? a : b);
     if (Date.now() - oldest.addedAt < BUFFER_MS) return;
 
-    // Scarta missioni non più valide
+    // Scarta missioni non piu valide
     _queue = _queue.filter(m => {
         if (!isStillValid(m, _beliefs)) {
-            console.log(`[QUEUE] scartata (non più valida): "${m.text}"`);
+            console.log(`[QUEUE] scartata (non piu valida): "${m.text}"`);
             return false;
         }
         return true;
     });
     if (_queue.length === 0) return;
 
-    // Scegli la migliore: prima le URGENTI (regole/penalità), poi per priorità
-    // (magnitudine), a parità la più vecchia.
+    // Scegli la migliore: prima le URGENTI (regole/penalita), poi per priorita
+    // (magnitudine), a parita la piu vecchia.
     _queue.sort((a, b) =>
         (b.urgent === true) - (a.urgent === true) ||
         b.priority - a.priority ||
@@ -185,15 +185,15 @@ function runOne(mission) {
     _running = { ...mission, controller };
 
     const startedAt = Date.now();
-    console.log(`[QUEUE] ▶ START "${mission.text}" (pri=${mission.priority.toFixed(2)}) — coda restante: ${_queue.length}`);
+    console.log(`[QUEUE] > START "${mission.text}" (pri=${mission.priority.toFixed(2)}) - coda restante: ${_queue.length}`);
     _bdiPause();   // silenzia il loop BDI dell'LLM agent durante la mission
 
     Promise.resolve()
         .then(() => _runMissionFn(mission.text, mission.senderId, controller.signal))
-        .catch(err => console.warn(`[QUEUE] ⚠ errore esecuzione: ${err?.message ?? err}`))
+        .catch(err => console.warn(`[QUEUE] [WARN] errore esecuzione: ${err?.message ?? err}`))
         .finally(() => {
             const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-            console.log(`[QUEUE] ■ END   "${mission.text}" — durata ${elapsed}s — coda restante: ${_queue.length}`);
+            console.log(`[QUEUE] [END] END   "${mission.text}" - durata ${elapsed}s - coda restante: ${_queue.length}`);
             _running = null;
             _bdiResume();   // il BDI riprende a giocare normalmente
         });
