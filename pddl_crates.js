@@ -123,10 +123,21 @@ export function computeDeadSquares(mapTiles) {
  * per essere "ok" (le casse non hanno una tile-obiettivo propria): è sempre
  * un esito da evitare. Copre i casi comuni di blocco mutuo a 2-3 casse;
  * non è una garanzia completa su configurazioni arbitrariamente complesse.
+ *
+ * Su un ciclo di dipendenza tra casse (es. 3 casse adiacenti in cluster
+ * denso, ognuna "bloccata" da un'altra in un anello) il ciclo NON va trattato
+ * come "sicuramente bloccato": questa funzione serve solo a decidere quali
+ * fatti (crate-slot ...) omettere dal problem per restringere la ricerca del
+ * solver, non c'è alcun costo di sicurezza nel gioco reale. Una falsa
+ * esclusione (sovra-escludere) può rendere IRRISOLVIBILE per il solver un
+ * target in realtà raggiungibile (fallimento totale, osservato in game:
+ * timeout 20000ms e retry bloccato sullo stesso job esterno); una falsa
+ * inclusione (sotto-escludere) costa al più qualche push sub-ottimale.
+ * Per questo un ciclo si risolve come "non frozen" (false), non "frozen".
  */
 export function computeFreezeDeadlock(cratePos, mapTiles, crateTiles, visited = new Set()) {
     const key = `${cratePos.x}_${cratePos.y}`;
-    if (visited.has(key)) return true;   // ricorsione su un ciclo di casse → conservativo: bloccata
+    if (visited.has(key)) return false;  // ciclo di casse → non assumere "bloccata": sovra-esclusione è peggio
     visited.add(key);
 
     const isWallOrFrozenCrate = (x, y) => {
