@@ -13,7 +13,7 @@
 // Import dalla libreria: solo onlineSolver
 
 import { onlineSolver } from '@unitn-asa/pddl-client';
-import { navigateTo }                  from './moves.js';
+import { navigateTo }                  from '../moves.js';
 
 const PDDL_TIMEOUT_MS = 5000;
 const ASTAR_RETRY     = 3;      // tentativi A* prima di tornare al solver

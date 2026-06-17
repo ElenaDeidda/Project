@@ -2,7 +2,7 @@ import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
 import { beliefs, updateConfig, updateMap, updateSensing, updateCrates } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
-import { initCoordination, relayInterceptDeliver } from './coordination.js';
+import { initCoordination, relayInterceptDeliver } from '../channel/coordination.js';
 import { formatMap }                  from './beliefs.js';
 import dotenv from 'dotenv';
 import fs from 'fs';

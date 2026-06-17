@@ -33,14 +33,14 @@ if (MUTED_LOG_TAGS.length) {
 
 const { DjsConnect } = await import("@unitn-asa/deliveroo-js-sdk/client");
 const { startLlmAgent } = await import("./llm_agent.js");
-const { navigateTo } = await import("./moves.js");
-const { beliefs, updateConfig, updateMap, updateSensing, formatMap } = await import("./beliefs.js");
+const { navigateTo } = await import("../bdi/moves.js");
+const { beliefs, updateConfig, updateMap, updateSensing, formatMap } = await import("../bdi/beliefs.js");
 // BDI machinery: lo stesso che usa main.js. Lo carichiamo anche qui perche
 // l'LLM agent deve giocare la partita normale (raccolta + consegna) quando
 // non sta eseguendo una special mission.
-const { generateOptions, deliberate } = await import("./options.js");
-const { IntentionRevision } = await import("./intentions.js");
-const { initCoordination, relayInterceptDeliver } = await import("./coordination.js");
+const { generateOptions, deliberate } = await import("../bdi/options.js");
+const { IntentionRevision } = await import("../bdi/intentions.js");
+const { initCoordination, relayInterceptDeliver } = await import("../channel/coordination.js");
 
 // 1. Connessione al gioco
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);

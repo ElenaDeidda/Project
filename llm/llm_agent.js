@@ -23,12 +23,12 @@
 
 import OpenAI from 'openai';
 import { initQueue, enqueue } from './mission_queue.js';
-import { parseIntervalMs } from './basic_functions.js';
+import { parseIntervalMs } from '../bdi/basic_functions.js';
 import { extractReward, extractMultiplier } from './mission_evaluator.js';
 import {
     startRendezvous, startRelayAsPostman, startRedLight, startFreezeInPlace,
     maybeHandleAdminSignal,
-} from './coordination.js';
+} from '../channel/coordination.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CONFIG LLM - LiteLLM UniTN (come lab8)
