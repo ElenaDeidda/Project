@@ -622,7 +622,7 @@ export function deliberate(options) {
                 return cur;                     // resta sulla delivery corrente
             return _commit(best);
         }
-        console.warn(`[DELIBERATE] sto trasportando ${beliefs.carriedParcels.length} pacchi ma nessun delivery raggiungibile — continuo a raccogliere`);
+        //console.warn(`[DELIBERATE] sto trasportando ${beliefs.carriedParcels.length} pacchi ma nessun delivery raggiungibile — continuo a raccogliere`);
     }
 
     const pickups = options.filter(o => o[0] === 'go_pick_up');
