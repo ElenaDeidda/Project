@@ -6,10 +6,14 @@
 //   2. buildProblem()       → stringa PDDL generata dai beliefs correnti
 //      (pre-processing: omette le crate-slot morte/freeze, vedi sezione 0)
 //   3. callSolver()         → chiama onlineSolver con timeout
-//   4. buildExecutionPlan() → separa push da segmenti move puri (→ A*)
-//   5. execCratePlan()      → executor: chiama subito il PDDL; A* è solo
-//                             fallback di emergenza se il solver non trova
-//                             un piano. Push con emitMove, move con A*.
+//   4. buildExecutionPlan() → traduce ogni azione del piano (move/push) in
+//                             un passo eseguibile con emitMove
+//   5. execCratePlan()      → executor: chiama subito il PDDL ed esegue il
+//                             piano passo-passo con emitMove (move e push
+//                             allo stesso modo). A* è SOLO il fallback di
+//                             emergenza usato quando il solver non trova
+//                             alcun piano — mai durante l'esecuzione di un
+//                             piano già trovato.
 //
 // Export pubblici: execCratePlan() (usato da plans_crate.js) e
 // computeDeadSquares() (usato da beliefs.js per precalcolare beliefs.deadSquares
@@ -317,15 +321,18 @@ async function callSolver(beliefs, targetX, targetY) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. PIANO → SEQUENZA MOSSE (come PddlExecutor di lab5, ma per il nostro dominio)
 //
-//    Separa le mosse in due categorie:
-//    - PUSH: eseguite passo per passo con emitMove (aggiornano beliefs casse)
-//    - MOVE pura: raggruppate in segmenti consecutivi → affidate ad A*
+//    Ogni azione del piano PDDL diventa UN passo eseguito direttamente con
+//    emitMove, nello stesso ordine deciso dal solver — niente A*: il piano
+//    è già un percorso passo-passo valido, ricalcolarlo con A* sarebbe solo
+//    un giro a vuoto (e potrebbe deviare dal piano se nel frattempo un'altra
+//    cella risulta più "comoda" per l'euristica di A*, pur essendo ancora
+//    valido sulla mappa). A* resta riservato al SOLO fallback di emergenza
+//    in execCratePlan(), quando il solver non trova proprio nessun piano.
 //
 //    Struttura del risultato:
 //    [
+//      { type: 'move', direction },
 //      { type: 'push', direction, crateFrom, crateTo },
-//      { type: 'move', direction },   ← solo se A* non disponibile
-//      { type: 'astar', target },     ← segmento move puro → A*
 //    ]
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -333,28 +340,20 @@ const PUSH_ACTIONS = new Set(['push-right', 'push-left', 'push-up', 'push-down']
 
 function buildExecutionPlan(planSteps) {
     const sequence = [];
-    let moveBatch  = [];   // accumula mosse MOVE consecutive
-
-    const flushMoveBatch = () => {
-        if (moveBatch.length === 0) return;
-        // L'ultimo nodo del batch è il target A*
-        const target = moveBatch[moveBatch.length - 1];
-        sequence.push({ type: 'astar', target });
-        moveBatch = [];
-    };
 
     for (const step of planSteps) {
         const act = step.action.toLowerCase();
 
         if (act === 'move') {
-            const to = parseCoords(step.args[2]);
-            if (to) moveBatch.push(to);
+            const from = parseCoords(step.args[1]);
+            const to   = parseCoords(step.args[2]);
+            if (!from || !to) continue;
+
+            const direction = directionBetween(from, to);
+            if (direction) sequence.push({ type: 'move', direction });
         }
 
         if (PUSH_ACTIONS.has(act)) {
-            // Prima di ogni push: consegna il batch move accumulato ad A*
-            flushMoveBatch();
-
             const from    = parseCoords(step.args[1]);
             const crateAt = parseCoords(step.args[2]);
             const behind  = parseCoords(step.args[3]);
@@ -372,8 +371,6 @@ function buildExecutionPlan(planSteps) {
         }
     }
 
-    // Flush finale: mosse MOVE in coda al piano
-    flushMoveBatch();
     return sequence;
 }
 
@@ -381,9 +378,12 @@ function buildExecutionPlan(planSteps) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. EXECUTOR — esegue il piano (pattern PddlExecutor di lab5)
 //
-//    Per ogni passo:
-//    - 'push'  → emitMove diretto + aggiorna beliefs casse
-//    - 'astar' → navigateTo (A*); se fallisce → ricalcola con solver
+//    Per ogni passo, 'move' e 'push' fanno entrambi emitMove diretto (il
+//    push aggiorna anche i beliefs delle casse). Se un emitMove viene
+//    rifiutato (stato del mondo cambiato — un altro agente si è messo in
+//    mezzo, una cassa si è spostata, ecc.) si ricalcola tutto il piano dalla
+//    posizione corrente, NON si passa ad A*: A* non sa spingere le casse e
+//    qui il piano PDDL è la fonte di verità.
 //
 //    Ritorna true se arrivati a destinazione, false altrimenti.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -454,41 +454,29 @@ export async function execCratePlan(beliefs, socket, targetX, targetY, shouldSto
             continue;
         }
 
-        // ── A* (segmento MOVE puro) ──────────────────────────────────────────
-        if (step.type === 'astar') {
-            console.log(`[PDDL_CREATES] A* verso (${step.target.x},${step.target.y})`);
+        // ── MOVE (passo puro del piano, nessuna cassa coinvolta) ─────────────
+        if (step.type === 'move') {
+            const result = await socket.emitMove(step.direction);
 
-            const outcome = await navigateTo(
-                beliefs.me,
-                step.target,
-                socket,
-                beliefs.mapTiles,
-                shouldStop,
-                ASTAR_RETRY,
-            );
-
-            if (outcome === 'reached') {
-                stepIndex++;
+            if (result?.x == null) {
+                console.warn(`[PDDL_CREATES] Move '${step.direction}' rifiutato — ricalcolo piano`);
+                // Mossa rifiutata: stato del mondo cambiato → ricalcola tutto
+                try {
+                    rawPlan = await callSolver(beliefs, targetX, targetY);
+                } catch (err) {
+                    console.warn('[PDDL_CREATES] Ricalcolo solver fallito:', err.message);
+                    return false;
+                }
+                if (!rawPlan) return false;
+                executionPlan = buildExecutionPlan(rawPlan);
+                stepIndex = 0;
                 continue;
             }
 
-            if (outcome === 'stopped') return false;
+            beliefs.me.x = result.x;
+            beliefs.me.y = result.y;
 
-            // A* fallito (cassa spostata da altro agente o percorso bloccato)
-            // → ricalcola il piano PDDL dalla posizione corrente
-            console.warn(`[PDDL_CREATES] A* fallito verso (${step.target.x},${step.target.y}) — ricalcolo piano PDDL`);
-
-            try {
-                rawPlan = await callSolver(beliefs, targetX, targetY);
-            } catch (err) {
-                console.warn('[PDDL_CREATES] Ricalcolo solver fallito:', err.message);
-                return false;
-            }
-
-            if (!rawPlan) return false;
-
-            executionPlan = buildExecutionPlan(rawPlan);
-            stepIndex = 0;
+            stepIndex++;
             continue;
         }
     }
