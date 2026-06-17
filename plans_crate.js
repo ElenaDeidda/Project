@@ -4,12 +4,14 @@
 // così hanno priorità su GoPickUp/Deliver/GoToSpawn normali.
 // isApplicableTo controlla sempre `beliefs.isCrateMap` come guardia.
 //
-// Navigazione delegata a execCratePlan (pddl_creates.js) che:
-//   1. tenta A* diretto (le casse sono muri per A*)
-//   2. se bloccato, chiama il solver PDDL per liberare il percorso dalle casse
-//   3. esegue i push con emitMove diretto
-//   4. usa A* per le mosse pure (move consecutivi)
-//   5. se A* fallisce → ricalcola con il solver PDDL
+// Navigazione delegata a execCratePlan (pddl_crates.js) che:
+//   1. chiama subito il solver PDDL (le casse sono muri per A*, quindi A*
+//      non saprebbe spingerle e sprecherebbe mosse se il percorso è bloccato)
+//   2. esegue ogni passo del piano (move e push) con emitMove diretto
+//   3. se un emitMove viene rifiutato, ricalcola il piano dalla posizione
+//      corrente chiamando di nuovo il solver — mai A* a metà piano
+//   4. A* viene usato SOLO come fallback di emergenza se il solver non
+//      trova alcun piano
 //
 // Marcatura "target irraggiungibile" e halt totale NON sono gestiti qui:
 // restano unica responsabilità rispettivamente di pddl_crates.js::callSolver

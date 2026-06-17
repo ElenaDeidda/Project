@@ -157,7 +157,7 @@ export function reachableDistances(start, walkableTiles, blocked, isDirectional 
 // Azioni opportunistiche: a ogni passo, se mi trovo fisicamente sopra un pacco
 // lo raccolgo, e se sono su una delivery tile con pacchi in mano li consegno —
 // indipendentemente dall'intenzione corrente.
-async function opportunisticActions(me, socket) {
+export async function opportunisticActions(me, socket) {
     const x = Math.round(me.x), y = Math.round(me.y);
 
     // Pickup: c'è un pacco libero proprio qui sotto?

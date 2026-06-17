@@ -21,7 +21,7 @@
 // Import dalla libreria: solo onlineSolver
 
 import { onlineSolver } from '@unitn-asa/pddl-client';
-import { navigateTo }                  from './moves.js';
+import { navigateTo, opportunisticActions } from './moves.js';
 
 const PDDL_TIMEOUT_MS = 20000;  // rete di sicurezza generosa, non una scadenza "normale"
 const ASTAR_RETRY     = 3;      // tentativi A* (solo fallback di emergenza, vedi execCratePlan)
@@ -286,7 +286,13 @@ function buildProblem(beliefs, targetX, targetY) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function callSolver(beliefs, targetX, targetY) {
-    const cacheKey = `${Math.round(targetX)}_${Math.round(targetY)}|${crateStateHash(beliefs)}`;
+    // La cache deve includere la posizione di partenza dell'agente: un piano
+    // calcolato da (ax,ay) non è valido se richiamato di nuovo da una
+    // posizione diversa (es. dopo che una move è stata rifiutata e l'agente
+    // non si è mosso da dove si trovava prima del piano stale precedente).
+    // Senza questo, un piano "vecchio" può essere riservito all'infinito.
+    const ax = Math.round(beliefs.me.x), ay = Math.round(beliefs.me.y);
+    const cacheKey = `${ax}_${ay}→${Math.round(targetX)}_${Math.round(targetY)}|${crateStateHash(beliefs)}`;
     if (planCache.has(cacheKey)) {
         console.log(`[PDDL_CREATES] piano da cache per (${targetX},${targetY}) — solver non chiamato`);
         return planCache.get(cacheKey);
@@ -305,7 +311,11 @@ async function callSolver(beliefs, targetX, targetY) {
         ),
     ]);
 
-    if (!rawPlan || rawPlan.length === 0) {
+    // rawPlan === [] è un piano valido (goal già soddisfatto, es. siamo già
+    // sul target): solo rawPlan falsy (undefined/null) è un vero fallimento
+    // del solver. Trattare [] come fallimento blacklistava per sempre target
+    // a cui l'agente era già arrivato.
+    if (!rawPlan) {
         console.error(`[PDDL_CREATES] NESSUN PIANO TROVATO verso (${targetX},${targetY}) — target escluso permanentemente`);
         beliefs.unreachableCrateTargets.add(`${Math.round(targetX)}_${Math.round(targetY)}`);
         return null;
@@ -385,6 +395,12 @@ function buildExecutionPlan(planSteps) {
 //    posizione corrente, NON si passa ad A*: A* non sa spingere le casse e
 //    qui il piano PDDL è la fonte di verità.
 //
+//    Dopo ogni passo riuscito si chiama opportunisticActions(): se l'agente
+//    si ritrova sopra un pacco lo raccoglie, se è su una delivery tile con
+//    pacchi in mano li consegna — stessa logica già usata da navigateTo()
+//    sui percorsi A*, ora attiva anche durante l'esecuzione diretta del
+//    piano PDDL (prima veniva persa perché qui non si passava più da A*).
+//
 //    Ritorna true se arrivati a destinazione, false altrimenti.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -450,6 +466,8 @@ export async function execCratePlan(beliefs, socket, targetX, targetY, shouldSto
             beliefs.mapTiles.set(fromKey, { type: '5'  });
             beliefs.mapTiles.set(toKey,   { type: '5!' });
 
+            await opportunisticActions(beliefs.me, socket);
+
             stepIndex++;
             continue;
         }
@@ -475,6 +493,8 @@ export async function execCratePlan(beliefs, socket, targetX, targetY, shouldSto
 
             beliefs.me.x = result.x;
             beliefs.me.y = result.y;
+
+            await opportunisticActions(beliefs.me, socket);
 
             stepIndex++;
             continue;
