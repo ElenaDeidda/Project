@@ -23,8 +23,10 @@
 import { onlineSolver } from '@unitn-asa/pddl-client';
 import { navigateTo, opportunisticActions } from './moves.js';
 
-const PDDL_TIMEOUT_MS = 20000;  // rete di sicurezza generosa, non una scadenza "normale"
-const ASTAR_RETRY     = 3;      // tentativi A* (solo fallback di emergenza, vedi execCratePlan)
+const PDDL_TIMEOUT_MS     = 20000;  // rete di sicurezza generosa, non una scadenza "normale"
+const ASTAR_RETRY         = 3;      // tentativi A* (solo fallback di emergenza, vedi execCratePlan)
+const TIMEOUT_COOLDOWN_MS = 15000;  // pausa breve su un target dopo un timeout, prima di riprovarlo
+const MAX_CONSECUTIVE_FAILURES = 3; // dopo N timeout consecutivi sullo stesso target → escluso per sempre
 
 // Cache piani: chiave = target + stato attuale delle casse. Evita di
 // richiamare il solver remoto per la stessa identica configurazione.
@@ -309,26 +311,58 @@ async function callSolver(beliefs, targetX, targetY) {
     console.log(`[PDDL_CREATES] Casse nei beliefs (${beliefs.crateTiles.size}):`,
         [...beliefs.crateTiles.keys()].join(', ') || 'nessuna');
 
-    const rawPlan = await Promise.race([
-        onlineSolver(domain, problem),
-        new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`timeout ${PDDL_TIMEOUT_MS}ms`)), PDDL_TIMEOUT_MS)
-        ),
-    ]);
+    let rawPlan;
+    try {
+        rawPlan = await Promise.race([
+            onlineSolver(domain, problem),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`timeout ${PDDL_TIMEOUT_MS}ms`)), PDDL_TIMEOUT_MS)
+            ),
+        ]);
+    } catch (err) {
+        // Timeout o errore del client PDDL (HTTP, parsing, ecc.): stesso
+        // contratto del "nessun piano trovato" qui sotto, mai un'eccezione
+        // che risale ai chiamanti — altrimenti il target non verrebbe mai
+        // marcato e verrebbe riprovato all'infinito (visto in game: stesso
+        // target in timeout ad ogni ciclo, agente bloccato col pacco in mano).
+        return _handleSolverFailure(beliefs, targetX, targetY, err.message);
+    }
 
     // rawPlan === [] è un piano valido (goal già soddisfatto, es. siamo già
     // sul target): solo rawPlan falsy (undefined/null) è un vero fallimento
     // del solver. Trattare [] come fallimento blacklistava per sempre target
     // a cui l'agente era già arrivato.
     if (!rawPlan) {
-        console.error(`[PDDL_CREATES] NESSUN PIANO TROVATO verso (${targetX},${targetY}) — target escluso permanentemente`);
-        beliefs.unreachableCrateTargets.add(`${Math.round(targetX)}_${Math.round(targetY)}`);
-        return null;
+        return _handleSolverFailure(beliefs, targetX, targetY, 'nessun piano trovato');
     }
 
     console.log(`[PDDL_CREATES] Piano trovato: ${rawPlan.length} passi`);
     planCache.set(cacheKey, rawPlan);
+    beliefs.crateTargetFailures?.delete(`${Math.round(targetX)}_${Math.round(targetY)}`);
     return rawPlan;
+}
+
+// Un fallimento del solver (timeout o nessun piano) non esclude subito per
+// sempre il target: un singolo timeout può essere solo lentezza transitoria
+// del solver esterno condiviso. Il target va in cooldown breve e si riprova;
+// solo dopo MAX_CONSECUTIVE_FAILURES fallimenti consecutivi diventa
+// permanentemente unreachable (fino al prossimo spostamento di una cassa,
+// che già azzera unreachableCrateTargets in beliefs.js).
+function _handleSolverFailure(beliefs, targetX, targetY, reason) {
+    const key   = `${Math.round(targetX)}_${Math.round(targetY)}`;
+    const count = (beliefs.crateTargetFailures.get(key) ?? 0) + 1;
+
+    if (count >= MAX_CONSECUTIVE_FAILURES) {
+        beliefs.crateTargetFailures.delete(key);
+        beliefs.crateTargetCooldowns.delete(key);
+        beliefs.unreachableCrateTargets.add(key);
+        console.error(`[PDDL_CREATES] NESSUN PIANO TROVATO verso (${targetX},${targetY}) dopo ${count} tentativi (${reason}) — target escluso permanentemente`);
+    } else {
+        beliefs.crateTargetFailures.set(key, count);
+        beliefs.crateTargetCooldowns.set(key, Date.now() + TIMEOUT_COOLDOWN_MS);
+        console.warn(`[PDDL_CREATES] Solver fallito verso (${targetX},${targetY}) — ${reason} (tentativo ${count}/${MAX_CONSECUTIVE_FAILURES}, cooldown ${TIMEOUT_COOLDOWN_MS}ms)`);
+    }
+    return null;
 }
 
 
@@ -452,7 +486,12 @@ export async function execCratePlan(beliefs, socket, targetX, targetY, shouldSto
             if (result?.x == null) {
                 console.warn(`[PDDL_CREATES] Push '${step.direction}' rifiutato — ricalcolo piano`);
                 // Push rifiutato: stato del mondo cambiato → ricalcola tutto
-                rawPlan = await callSolver(beliefs, targetX, targetY);
+                try {
+                    rawPlan = await callSolver(beliefs, targetX, targetY);
+                } catch (err) {
+                    console.warn('[PDDL_CREATES] Ricalcolo solver fallito (push):', err.message);
+                    return false;
+                }
                 if (!rawPlan) return false;
                 executionPlan = buildExecutionPlan(rawPlan);
                 stepIndex = 0;

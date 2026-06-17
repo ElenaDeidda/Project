@@ -103,6 +103,17 @@ const ENEMY_ZONE_PENALTY      = 5;     // penalità di score per nemico vicino a
 let lastPickupSeenTime = Date.now();   // ultima volta con ≥1 pacco raccoglibile visibile
 const exhaustedZones   = new Map();    // "x_y" centro zona esausta → scadenza (ms)
 
+// Stesso pattern di exhaustedZones: un target con un cooldown attivo (vedi
+// beliefs.crateTargetCooldowns, impostato da pddl_crates.js dopo un timeout
+// del solver) va scartato dalle opzioni finché non scade, senza escluderlo
+// per sempre come unreachableCrateTargets.
+function isOnCooldown(map, key) {
+    const exp = map.get(key);
+    if (exp == null) return false;
+    if (exp <= Date.now()) { map.delete(key); return false; }
+    return true;
+}
+
 function genIntervalMs() {
     const p = beliefs.config.GAME?.parcels ?? {};
     const ms = parseIntervalMs(p.generation_event ?? p.generation_time);
@@ -252,6 +263,7 @@ function buildPickupOptions(agentPositions, dist) {
         // Il solver PDDL ha già confermato che non esiste un piano per questo
         // punto (mappa con casse) → escluso in modo permanente
         if (beliefs.unreachableCrateTargets.has(key)) continue;
+        if (isOnCooldown(beliefs.crateTargetCooldowns, key)) continue;
 
         // Distanza REALE di percorso: se irraggiungibile (muri/nemici) → scarta
         const rd = realDist(dist, parcel.x, parcel.y);
@@ -283,7 +295,9 @@ function buildDeliverOptions(dist) {
 
         // Escluso in modo permanente: il solver PDDL ha già confermato che
         // non esiste un piano per raggiungere questo delivery point
-        if (beliefs.unreachableCrateTargets.has(`${Math.round(dp.x)}_${Math.round(dp.y)}`)) continue;
+        const dpKey = `${Math.round(dp.x)}_${Math.round(dp.y)}`;
+        if (beliefs.unreachableCrateTargets.has(dpKey)) continue;
+        if (isOnCooldown(beliefs.crateTargetCooldowns, dpKey)) continue;
 
         options.push(['deliver', dp.x, dp.y, d]);
     }
@@ -342,6 +356,7 @@ function buildSpawnOptions(agentPositions, dist) {
             // Escluso in modo permanente: il solver PDDL ha già confermato
             // che non esiste un piano per raggiungere questa spawn tile
             if (beliefs.unreachableCrateTargets.has(key)) continue;
+            if (isOnCooldown(beliefs.crateTargetCooldowns, key)) continue;
 
             const [x, y] = key.split('_').map(Number);
 
