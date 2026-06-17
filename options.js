@@ -386,6 +386,12 @@ function buildSpawnOptions(agentPositions, dist) {
  *   - Se stai portando pacchi  → solo opzioni 'deliver'
  *   - Altrimenti               → opzioni 'go_pick_up' + 'go_to_spawn'
  */
+// Vero solo nel tick in cui si è effettivamente tentato di generare opzioni
+// 'deliver' (shouldDeliver() === true). Distingue, in deliberate(), il caso
+// "nessun delivery raggiungibile" (reale) dal caso "non sto ancora
+// consegnando, sto solo accumulando pacchi" (normale, non è un problema).
+let _deliverAttempted = false;
+
 export function generateOptions() {
     if (beliefs.halted) return [];
 
@@ -396,6 +402,7 @@ export function generateOptions() {
     );
 
     if (shouldDeliver()) {
+        _deliverAttempted = true;
         // In viaggio verso il delivery non siamo "in attesa di spawn":
         // tieni fresca la finestra di pattugliamento.
         lastPickupSeenTime = Date.now();
@@ -406,6 +413,7 @@ export function generateOptions() {
 
     // Non sta portando nulla, OPPURE sta portando ma non ha ancora raggiunto
     // la soglia → continua a cercare pacchi da raccogliere
+    _deliverAttempted = false;
 
     const agentPositions = getAgentPositions();
     const pickups        = buildPickupOptions(agentPositions, dist);
@@ -511,7 +519,12 @@ export function deliberate(options) {
                 return cur;                     // resta sulla delivery corrente
             return _commit(best);
         }
-        console.warn(`[DELIBERATE] sto trasportando ${beliefs.carriedParcels.length} pacchi ma nessun delivery raggiungibile — continuo a raccogliere`);
+        // Avvisa solo se si è davvero tentato di consegnare (shouldDeliver()
+        // === true) e non c'era nessun delivery raggiungibile: se invece si
+        // sta ancora accumulando pacchi (shouldDeliver() === false), questo
+        // ramo è normale e non un problema — niente log fuorviante.
+        if (_deliverAttempted)
+            console.warn(`[DELIBERATE] sto trasportando ${beliefs.carriedParcels.length} pacchi ma nessun delivery raggiungibile — continuo a raccogliere`);
     }
 
     const pickups = options.filter(o => o[0] === 'go_pick_up');

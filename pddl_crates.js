@@ -69,23 +69,19 @@ function isWall(mapTiles, x, y) {
     return !t || t.type === '0';
 }
 
-function isCrateSlot(mapTiles, x, y) {
-    const t = mapTiles.get(`${x}_${y}`);
-    return !!t && (t.type === '5' || t.type === '5!');
-}
-
 /**
  * Calcolo STATICO (solo geometria: muri + crate-slot, indipendente da dove
  * sono casse/agente in questo istante) → da chiamare una sola volta al
  * caricamento mappa (vedi beliefs.js::updateMap), non ad ogni chiamata al
  * solver.
  *
- * Punto fisso sull'universo delle crate-slot: una tile è "viva" se esiste
- * almeno una direzione di push-fuori strutturalmente possibile (l'agente può
- * stare sul lato opposto E la destinazione è anch'essa una crate-slot) verso
- * un'altra tile ancora viva. Tutto ciò che non resta vivo a convergenza è
- * "dead square" — spingere una cassa lì la blocca per sempre, qualunque
- * target si stia cercando di raggiungere.
+ * Una crate-slot è "morta" se NON esiste alcuna direzione di push-fuori
+ * strutturalmente possibile (l'agente può stare sul lato opposto E la
+ * destinazione è anch'essa una crate-slot): in tal caso, una cassa spinta
+ * lì non potrà mai più essere mossa, qualunque target si stia cercando di
+ * raggiungere. Basta una via d'uscita singola per non essere "morta" — non
+ * serve che anche la tile di destinazione abbia a sua volta una via d'uscita:
+ * quella è una proprietà della destinazione, non di questa tile.
  */
 export function computeDeadSquares(mapTiles) {
     const slots = [];
@@ -93,25 +89,26 @@ export function computeDeadSquares(mapTiles) {
         if (tile.type === '5' || tile.type === '5!') slots.push(key);
     }
 
-    const alive = new Set(slots);
-    let changed = true;
-    while (changed) {
-        changed = false;
-        for (const key of alive) {
-            const [x, y] = key.split('_').map(Number);
-            const hasEscape = DIRECTIONS.some(({ dx, dy }) => {
-                const behindOk = !isWall(mapTiles, x - dx, y - dy);   // tile dove sta l'agente
-                const destKey  = `${x + dx}_${y + dy}`;
-                return behindOk && isCrateSlot(mapTiles, x + dx, y + dy) && alive.has(destKey);
-            });
-            if (!hasEscape) {
-                alive.delete(key);
-                changed = true;
-            }
-        }
+    // Un solo passaggio: una crate-slot è morta solo se NON esiste alcuna
+    // direzione strutturalmente possibile per spingere via una cassa che vi
+    // si trovasse (muro dietro l'agente, o destinazione non è una slot).
+    // Non richiediamo che la destinazione sia a sua volta "viva all'infinito":
+    // basta una via d'uscita singola per liberare il percorso ora — la sua
+    // eventuale futura immobilità è un problema della destinazione, non di
+    // questa tile.
+    const slotSet = new Set(slots);
+    const dead = new Set();
+
+    for (const key of slots) {
+        const [x, y] = key.split('_').map(Number);
+        const hasEscape = DIRECTIONS.some(({ dx, dy }) => {
+            const behindOk = !isWall(mapTiles, x - dx, y - dy);   // tile dove sta l'agente
+            const destKey  = `${x + dx}_${y + dy}`;
+            return behindOk && slotSet.has(destKey);
+        });
+        if (!hasEscape) dead.add(key);
     }
 
-    const dead = new Set(slots.filter(k => !alive.has(k)));
     return dead;
 }
 
