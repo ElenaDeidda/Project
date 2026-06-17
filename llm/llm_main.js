@@ -4,7 +4,7 @@ import fs from 'fs';
 // Cerca .env.llm specifico per l'LLM, altrimenti usa .env condiviso.
 // Va caricato PRIMA degli altri import perche llm_agent.js legge process.env
 // (LITELLM_API_KEY, LOCAL_MODEL, LLM_TEMP) al momento dell'import.
-const envFile = fs.existsSync('.env.llm') ? '.env.llm' : '.env';
+const envFile = fs.existsSync('llm/.env.llm') ? 'llm/.env.llm' : '.env';
 dotenv.config({ path: envFile, override: true });
 console.log(`[LLM] env caricato da ${envFile}`);
 
@@ -33,14 +33,14 @@ if (MUTED_LOG_TAGS.length) {
 
 const { DjsConnect } = await import("@unitn-asa/deliveroo-js-sdk/client");
 const { startLlmAgent } = await import("./llm_agent.js");
-const { navigateTo } = await import("./moves.js");
-const { beliefs, updateConfig, updateMap, updateSensing, formatMap } = await import("./beliefs.js");
+const { navigateTo } = await import("../bdi/moves.js");
+const { beliefs, updateConfig, updateMap, updateSensing, formatMap } = await import("../bdi/beliefs.js");
 // BDI machinery: lo stesso che usa main.js. Lo carichiamo anche qui perche
 // l'LLM agent deve giocare la partita normale (raccolta + consegna) quando
 // non sta eseguendo una special mission.
-const { generateOptions, deliberate } = await import("./options.js");
-const { IntentionRevision } = await import("./intentions.js");
-const { initCoordination, relayInterceptDeliver } = await import("./coordination.js");
+const { generateOptions, deliberate } = await import("../bdi/options.js");
+const { IntentionRevision } = await import("../bdi/intentions.js");
+const { initCoordination, relayInterceptDeliver } = await import("../channel/coordination.js");
 
 // 1. Connessione al gioco
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
