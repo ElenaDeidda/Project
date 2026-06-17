@@ -4,7 +4,13 @@
 // così hanno priorità su GoPickUp/Deliver/GoToSpawn normali.
 // isApplicableTo controlla sempre `beliefs.isCrateMap` come guardia.
 //
-// Navigazione delegata a execCratePlan (pddl_crates.js) che:
+// Il solver PDDL costa una chiamata di rete e serve solo dove può essere
+// necessario spingere casse per liberare il percorso: go_to_spawn e deliver.
+// Raccogliere un pacco (go_pick_up) è normale comportamento BDI — semplice
+// spostamento A*, nessun solver — quindi GoPickUpCrate è identico a GoPickUp
+// (plans.js), solo con la guardia isCrateMap.
+//
+// GoToSpawnCrate/DeliverCrate delegano invece a execCratePlan (pddl_crates.js) che:
 //   1. chiama subito il solver PDDL (le casse sono muri per A*, quindi A*
 //      non saprebbe spingerle e sprecherebbe mosse se il percorso è bloccato)
 //   2. esegue ogni passo del piano (move e push) con emitMove diretto
@@ -19,6 +25,7 @@
 // options.js::checkGlobalDeadlock (unico punto che decide haltAgent).
 
 import { beliefs }       from './beliefs.js';
+import { navigateTo }    from './moves.js';
 import { execCratePlan } from './pddl_crates.js';
 
 
@@ -38,6 +45,9 @@ class PlanBase {
 // GoPickUpCrate — raggiunge e raccoglie un pacco su mappa con casse
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Niente solver qui: raccogliere un pacco è normale comportamento BDI
+// (semplice spostamento), il PDDL serve solo per go_to_spawn/deliver dove
+// può essere necessario spingere casse. Stessa logica di GoPickUp (plans.js).
 export class GoPickUpCrate extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
@@ -49,11 +59,12 @@ export class GoPickUpCrate extends PlanBase {
         const parcel = beliefs.parcels.get(id);
         if (!parcel || parcel.carriedBy) throw [`Pacco ${id} non disponibile`];
 
-        console.log(`[CRATE_PLANS] GoPickUpCrate → (${x},${y})`);
+        console.log(`[CRATE_PLANS] GoPickUpCrate A* → (${x},${y})`);
 
-        const arrived = await execCratePlan(beliefs, this.#socket, x, y, this.shouldStop);
-        if (!arrived) throw [`PDDL/A* fallito per GoPickUpCrate → (${x},${y})`];
-        if (this.stopped) throw ['stopped'];
+        const nav = await navigateTo(beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop);
+        if (nav === 'stopped') throw ['stopped'];
+        if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
+        if (this.stopped)      throw ['stopped'];
 
         // Potrebbe essere già stato raccolto opportunisticamente in transito
         if (beliefs.carriedParcels.some(p => p.id === id)) return true;

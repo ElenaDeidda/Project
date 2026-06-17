@@ -2,6 +2,7 @@
 // Il socket viene passato nel costruttore e inoltrato ai piani.
 
 import { planLibrary } from './plans.js';
+import { beliefs }     from './beliefs.js';
 
 export class IntentionRevision {
     #socket;
@@ -85,6 +86,16 @@ class IntentionDeliberation {
 
 function _predicateKey(p) {
     if (p[0] === 'go_pick_up')  return `${p[0]}_${p[1]}_${p[2]}_${p[3]}`;
+    // Su mappa con casse, deliver/go_to_spawn passano dal solver PDDL
+    // (chiamata di rete, costosa). Una volta che un piano è in esecuzione
+    // va eseguito fino in fondo — il solo cambiare leggermente l'opzione
+    // "migliore" tra un tick e l'altro (es. un altro delivery point quasi
+    // equivalente) non deve interrompere/buttare via il piano in corso.
+    // Per questo la key ignora le coordinate qui: resta la STESSA azione
+    // finché non termina (successo o eccezione), poi il prossimo push()
+    // ridecide da zero in base ai beliefs aggiornati.
+    if (p[0] === 'deliver'     && beliefs.isCrateMap) return p[0];
+    if (p[0] === 'go_to_spawn' && beliefs.isCrateMap) return p[0];
     if (p[0] === 'deliver')     return `${p[0]}_${p[1]}_${p[2]}`;
     if (p[0] === 'go_to_spawn') return p[1] != null ? `${p[0]}_${p[1]}_${p[2]}` : p[0];
     return p[0];
