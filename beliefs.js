@@ -29,6 +29,16 @@ export const beliefs = {
     // nessun piano (mappa con casse) — esclusi in modo permanente dalle opzioni.
     unreachableCrateTargets: new Set(),
 
+    // "x_y" → timestamp di scadenza cooldown dopo un timeout/errore del
+    // solver su quel target (mappa con casse): escluso solo temporaneamente
+    // dalle opzioni, non per sempre come unreachableCrateTargets.
+    crateTargetCooldowns: new Map(),
+
+    // "x_y" → numero di timeout/errori consecutivi del solver su quel target
+    // (mappa con casse). Azzerato al primo piano trovato; allo scadere di
+    // MAX_CONSECUTIVE_FAILURES il target passa a unreachableCrateTargets.
+    crateTargetFailures: new Map(),
+
     // true quando per NESSUN target esiste un piano possibile: l'agente
     // smette di deliberare (vedi haltAgent()).
     halted: false,
@@ -308,6 +318,8 @@ export function updateCrates(sensing) {
         if (beliefs.unreachableCrateTargets.size > 0) {
             console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
             beliefs.unreachableCrateTargets.clear();
+            beliefs.crateTargetCooldowns.clear();
+            beliefs.crateTargetFailures.clear();
         }
         console.log(`[BELIEFS] cassa rimossa da (${mx},${my}) — l'agente è su quella cella`);
     }
@@ -332,6 +344,8 @@ export function updateCrates(sensing) {
                 if (beliefs.unreachableCrateTargets.size > 0) {
                     console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
                     beliefs.unreachableCrateTargets.clear();
+                    beliefs.crateTargetCooldowns.clear();
+                    beliefs.crateTargetFailures.clear();
                 }
                 console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — riconciliazione server`);
             }
@@ -363,6 +377,8 @@ export function updateCrates(sensing) {
             if (beliefs.unreachableCrateTargets.size > 0) {
                 console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
                 beliefs.unreachableCrateTargets.clear();
+                beliefs.crateTargetCooldowns.clear();
+                beliefs.crateTargetFailures.clear();
             }
             console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — tile ora walkable (fallback positions)`);
         }
