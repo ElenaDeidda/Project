@@ -19,6 +19,17 @@ export class IntentionRevision {
         const key = _predicateKey(predicate);
         if (this.#isRunning && key === this.#currentKey) return;
 
+        // Su mappa con casse, un piano go_to_spawn/deliver in corso è
+        // calcolato dal solver PDDL e può includere push di casse "in transito"
+        // (es. sposta una cassa di lato, gira intorno, la rimette a posto):
+        // interromperlo a metà — anche per un'opzione di tipo diverso, come un
+        // pacco appena apparso — lascia le casse in una posizione intermedia
+        // che può bloccare i percorsi normali. Va eseguito fino in fondo
+        // (successo, fallimento o target irraggiungibile), poi si ridelibera.
+        if (this.#isRunning && beliefs.isCrateMap &&
+            (this.#currentKey === 'go_to_spawn' || this.#currentKey === 'deliver'))
+            return;
+
         // (log rimosso) sostituzione di intenzione: ferma quella corrente
         this.#current?.stop();
 
