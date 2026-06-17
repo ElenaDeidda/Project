@@ -4,7 +4,7 @@
 // Struttura ispirata al pattern lab5 (4domain.js):
 //   1. buildDomain()        → stringa PDDL fissa del dominio
 //   2. buildProblem()       → stringa PDDL generata dai beliefs correnti
-//      (pre-processing: omette le crate-slot morte/freeze, vedi sezione 0)
+//      (pre-processing: omette le crate-slot morte (dead square), vedi sezione 0)
 //   3. callSolver()         → chiama onlineSolver con timeout
 //   4. buildExecutionPlan() → traduce ogni azione del piano (move/push) in
 //                             un passo eseguibile con emitMove
@@ -114,43 +114,34 @@ export function computeDeadSquares(mapTiles) {
     return new Set(slots.filter(k => !alive.has(k)));
 }
 
-/**
- * Calcolo DINAMICO (dipende dalla configurazione attuale delle altre casse)
- * → va richiamato ad ogni buildProblem(), mai cachato. Verifica se una cassa
- * IPOTETICAMENTE posizionata in cratePos sarebbe "frozen": bloccata sia
- * sull'asse orizzontale che su quello verticale da muri o da altre casse a
- * loro volta frozen. Una cassa frozen, su questa mappa, non ha mai un motivo
- * per essere "ok" (le casse non hanno una tile-obiettivo propria): è sempre
- * un esito da evitare. Copre i casi comuni di blocco mutuo a 2-3 casse;
- * non è una garanzia completa su configurazioni arbitrariamente complesse.
- *
- * Su un ciclo di dipendenza tra casse (es. 3 casse adiacenti in cluster
- * denso, ognuna "bloccata" da un'altra in un anello) il ciclo NON va trattato
- * come "sicuramente bloccato": questa funzione serve solo a decidere quali
- * fatti (crate-slot ...) omettere dal problem per restringere la ricerca del
- * solver, non c'è alcun costo di sicurezza nel gioco reale. Una falsa
- * esclusione (sovra-escludere) può rendere IRRISOLVIBILE per il solver un
- * target in realtà raggiungibile (fallimento totale, osservato in game:
- * timeout 20000ms e retry bloccato sullo stesso job esterno); una falsa
- * inclusione (sotto-escludere) costa al più qualche push sub-ottimale.
- * Per questo un ciclo si risolve come "non frozen" (false), non "frozen".
- */
-export function computeFreezeDeadlock(cratePos, mapTiles, crateTiles, visited = new Set()) {
-    const key = `${cratePos.x}_${cratePos.y}`;
-    if (visited.has(key)) return false;  // ciclo di casse → non assumere "bloccata": sovra-esclusione è peggio
-    visited.add(key);
-
-    const isWallOrFrozenCrate = (x, y) => {
-        if (isWall(mapTiles, x, y)) return true;
-        const k = `${x}_${y}`;
-        if (crateTiles.has(k)) return computeFreezeDeadlock({ x, y }, mapTiles, crateTiles, visited);
-        return false;
-    };
-
-    const blockedH = isWallOrFrozenCrate(cratePos.x + 1, cratePos.y) && isWallOrFrozenCrate(cratePos.x - 1, cratePos.y);
-    const blockedV = isWallOrFrozenCrate(cratePos.x, cratePos.y + 1) && isWallOrFrozenCrate(cratePos.x, cratePos.y - 1);
-    return blockedH && blockedV;
-}
+// computeFreezeDeadlock: DISATTIVATA. Calcolo dinamico (dipendente dalla
+// configurazione attuale delle altre casse) che doveva rilevare casse
+// "frozen" (bloccate sia in orizzontale che in verticale da muri o altre
+// casse a loro volta frozen) per escluderle come crate-slot dal problem.
+// Anche dopo aver corretto il guard sui cicli (risolto come "non frozen"
+// invece di "frozen"), su mappe dense con molte casse adiacenti continuava
+// a sovra-escludere slot, rendendo IRRISOLVIBILE per il solver remoto un
+// target in realtà raggiungibile (osservato in game: DeliverCrate → (5,2),
+// timeout 20000ms + retry bloccato sullo stesso job esterno). Si è scelto
+// di non usarla più: resta solo l'esclusione statica computeDeadSquares
+// (sicura, nessun falso positivo dinamico possibile).
+//
+// export function computeFreezeDeadlock(cratePos, mapTiles, crateTiles, visited = new Set()) {
+//     const key = `${cratePos.x}_${cratePos.y}`;
+//     if (visited.has(key)) return false;  // ciclo di casse → non assumere "bloccata": sovra-esclusione è peggio
+//     visited.add(key);
+//
+//     const isWallOrFrozenCrate = (x, y) => {
+//         if (isWall(mapTiles, x, y)) return true;
+//         const k = `${x}_${y}`;
+//         if (crateTiles.has(k)) return computeFreezeDeadlock({ x, y }, mapTiles, crateTiles, visited);
+//         return false;
+//     };
+//
+//     const blockedH = isWallOrFrozenCrate(cratePos.x + 1, cratePos.y) && isWallOrFrozenCrate(cratePos.x - 1, cratePos.y);
+//     const blockedV = isWallOrFrozenCrate(cratePos.x, cratePos.y + 1) && isWallOrFrozenCrate(cratePos.x, cratePos.y - 1);
+//     return blockedH && blockedV;
+// }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -254,9 +245,14 @@ function buildProblem(beliefs, targetX, targetY) {
     }
 
     /** Slot cassa: tile valide come destinazione di push ('5' e '5!'),
-     *  escluse le dead square statiche e le tile in cui una cassa
-     *  spinta lì risulterebbe frozen — riduce lo spazio di ricerca del
-     *  solver senza toccare il dominio (vedi sezione 0). */
+     *  escluse le dead square statiche — riduce lo spazio di ricerca del
+     *  solver senza toccare il dominio (vedi sezione 0).
+     *  L'esclusione dinamica via computeFreezeDeadlock è disattivata: anche
+     *  dopo la correzione del guard sui cicli, su mappe dense con molte
+     *  casse adiacenti continuava a sovra-escludere slot, rendendo
+     *  irrisolvibile per il solver remoto un target in realtà raggiungibile
+     *  (vedi DeliverCrate → (5,2): timeout 20000ms + retry bloccato sullo
+     *  stesso job esterno). Resta solo deadSquares (statico, sicuro). */
     let excludedSlots = 0;
     for (const [key, tile] of beliefs.mapTiles.entries()) {
         if (tile.type !== '5' && tile.type !== '5!') continue;
@@ -265,15 +261,15 @@ function buildProblem(beliefs, targetX, targetY) {
         objects.add(tid);
 
         if (beliefs.deadSquares?.has(key)) { excludedSlots++; continue; }
-        if (!beliefs.crateTiles.has(key) &&
-            computeFreezeDeadlock({ x, y }, beliefs.mapTiles, beliefs.crateTiles)) {
-            excludedSlots++; continue;
-        }
+        // if (!beliefs.crateTiles.has(key) &&
+        //     computeFreezeDeadlock({ x, y }, beliefs.mapTiles, beliefs.crateTiles)) {
+        //     excludedSlots++; continue;
+        // }
 
         facts.push(`(crate-slot ${tid})`);
     }
     if (excludedSlots > 0) {
-        console.log(`[PDDL_CREATES] ${excludedSlots} crate-slot escluse dal problem (dead/freeze)`);
+        console.log(`[PDDL_CREATES] ${excludedSlots} crate-slot escluse dal problem (dead square)`);
     }
 
     const targetTile = tileId(targetX, targetY);
