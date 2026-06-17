@@ -1,21 +1,10 @@
 import dotenv from 'dotenv';
 import fs from 'fs';
 
-// Cerca .env.llm specifico per l'LLM, altrimenti usa .env condiviso.
-// Va caricato PRIMA degli altri import perche llm_agent.js legge process.env
-// (LITELLM_API_KEY, LOCAL_MODEL, LLM_TEMP) al momento dell'import.
 const envFile = fs.existsSync('llm/.env.llm') ? 'llm/.env.llm' : '.env';
 dotenv.config({ path: envFile, override: true });
 console.log(`[LLM] env caricato da ${envFile}`);
 
-// ─── Filtro log: silenzia il "rumore" di gioco del BDI ───────────────────────
-// I moduli condivisi (plans.js, options.js, intentions.js, ...) loggano con tag
-// come [PLANS] [PATROL] [OPTIONS] [INTENTIONS] [BDI-LLM] [RULES] [HEARTBEAT].
-// Per studiare SOLO il comportamento dell'LLM li filtriamo qui a runtime, senza
-// toccare quei file (cosi main.js resta invariato). Sono SILENZIATI di default;
-// personalizza la lista con la env LLM_LOG_MUTE:
-//   LLM_LOG_MUTE=""               -> rivedi tutto (nessun filtro)
-//   LLM_LOG_MUTE="PLANS,PATROL"   -> silenzia solo quei due tag
 const MUTED_LOG_TAGS = (process.env.LLM_LOG_MUTE
         ?? 'PLANS,PATROL,OPTIONS,INTENTIONS,BDI-LLM,RULES,HEARTBEAT')
     .split(',').map(s => s.trim()).filter(Boolean);
@@ -42,17 +31,10 @@ const { generateOptions, deliberate } = await import("../bdi/options.js");
 const { IntentionRevision } = await import("../bdi/intentions.js");
 const { initCoordination, relayInterceptDeliver } = await import("../channel/coordination.js");
 
-// 1. Connessione al gioco
 const socket = DjsConnect(process.env.HOST + '?token=' + process.env.TOKEN);
 
-// 2. Listener: config (per observation_distance ecc.), map (per pathfinding),
-//    you (identita + posizione), sensing (pacchi, nemici).
 socket.onConfig(c => updateConfig(c));
 
-// onMap arriva alla connessione e di nuovo a ogni RESTART della partita. Al
-// restart le regole installate dall'LLM (stack_size, max_deliver_reward, ...)
-// devono essere AZZERATE: valgono per la partita in corso, non per le successive.
-// Salta il primo map (nessuna regola ancora) e resetta dai successivi.
 let _mapLoaded = false;
 socket.onMap((w, h, t) => {
     updateMap(w, h, t);
@@ -74,10 +56,7 @@ socket.onYou(me => {
     beliefs.me.score    = me.score;
 });
 
-// Loop BDI: ad ogni sensing rideliberiamo le options e pushiamo l'intenzione.
-// Stesso pattern di main.js, ma con un interruttore `bdiPaused` controllato
-// dall'LLM agent: quando una special mission e in esecuzione, il BDI tace
-// per non rubarle l'iniziativa.
+
 const agent = new IntentionRevision(socket);
 let bdiPaused = false;
 
@@ -93,8 +72,7 @@ function bdiResume() {
     console.log(`[LLM-MAIN] >  BDI ripreso - torno a giocare normalmente`);
 }
 
-// Log "intelligente" della predicate corrente: stampa solo quando cambia,
-// cosi non spammiamo. Utile per vedere cosa sta facendo l'agente.
+
 let _lastPredicate = null;
 function logPredicateIfChanged(predicate) {
     const key = JSON.stringify(predicate);
@@ -262,14 +240,6 @@ function applyRulesToPredicate(predicate) {
     if (!predicate) return predicate;
     const [action, ...args] = predicate;
 
-    // NB: stack_size NON e piu gestito qui. La logica "consegna in stack di N"
-    // vive in options.js (shouldDeliver): finche porti < N l'agente resta in
-    // modalita RACCOLTA e usa la pattuglia normale del BDI (con rotazione delle
-    // zone spawn esauste). La quantita esatta consegnata la gestiscono moves.js
-    // (consegna automatica) e plans.js (piano Deliver).
-
-    // zero_delivery: la tile target e vietata -> ne scelgo un'altra (la piu
-    // vicina che non sia nella lista).
     if (Array.isArray(activeRules.zeroDeliveries) && action === 'deliver') {
         const [x, y] = args;
         if (activeRules.zeroDeliveries.some(t => t.x === x && t.y === y)) {
@@ -289,9 +259,7 @@ function applyRulesToPredicate(predicate) {
         }
     }
 
-    // bonus_delivery: se sto andando a una delivery NORMALE e ne esiste una
-    // bonus LIBERA (non occupata da nemici) entro 5 passi extra, preferisco
-    // quella. Se sono tutte occupate, tengo la delivery normale del BDI.
+ 
     if (Array.isArray(activeRules.bonusDeliveries) && action === 'deliver') {
         const [x, y] = args;
         const targetIsBonus = activeRules.bonusDeliveries.some(t => t.x === x && t.y === y);
