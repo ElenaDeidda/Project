@@ -16,7 +16,7 @@
 // (unico punto che scrive in beliefs.unreachableCrateTargets) e di
 // options.js::checkGlobalDeadlock (unico punto che decide haltAgent).
 
-import { beliefs }       from './beliefs.js';
+import { beliefs }       from '../beliefs.js';
 import { execCratePlan } from './pddl_crates.js';
 
 
