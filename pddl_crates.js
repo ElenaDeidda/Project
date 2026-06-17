@@ -80,12 +80,15 @@ function isWall(mapTiles, x, y) {
  * solver.
  *
  * Una crate-slot è "morta" se NON esiste alcuna direzione di push-fuori
- * strutturalmente possibile (l'agente può stare sul lato opposto E la
- * destinazione è anch'essa una crate-slot): in tal caso, una cassa spinta
- * lì non potrà mai più essere mossa, qualunque target si stia cercando di
- * raggiungere. Basta una via d'uscita singola per non essere "morta" — non
- * serve che anche la tile di destinazione abbia a sua volta una via d'uscita:
- * quella è una proprietà della destinazione, non di questa tile.
+ * verso un'altra slot ANCH'ESSA viva (l'agente può stare sul lato opposto E
+ * la destinazione è una crate-slot non a sua volta morta). Punto fisso,
+ * non un solo passaggio: buildProblem() omette il fatto (crate-slot ?t) per
+ * ogni tile morta (vedi sotto), quindi una fuga verso una tile che risulterà
+ * morta non è una fuga legale nel problem reale — la precondizione della
+ * push su quella destinazione non sarà mai soddisfatta. Senza iterare a
+ * punto fisso, una tile la cui unica fuga porta a un angolo morto verrebbe
+ * creduta "viva" controllando contro l'insieme grezzo di tutte le slot,
+ * quando invece quella fuga non sarà mai utilizzabile dal solver.
  */
 export function computeDeadSquares(mapTiles) {
     const slots = [];
@@ -93,27 +96,22 @@ export function computeDeadSquares(mapTiles) {
         if (tile.type === '5' || tile.type === '5!') slots.push(key);
     }
 
-    // Un solo passaggio: una crate-slot è morta solo se NON esiste alcuna
-    // direzione strutturalmente possibile per spingere via una cassa che vi
-    // si trovasse (muro dietro l'agente, o destinazione non è una slot).
-    // Non richiediamo che la destinazione sia a sua volta "viva all'infinito":
-    // basta una via d'uscita singola per liberare il percorso ora — la sua
-    // eventuale futura immobilità è un problema della destinazione, non di
-    // questa tile.
-    const slotSet = new Set(slots);
-    const dead = new Set();
-
-    for (const key of slots) {
-        const [x, y] = key.split('_').map(Number);
-        const hasEscape = DIRECTIONS.some(({ dx, dy }) => {
-            const behindOk = !isWall(mapTiles, x - dx, y - dy);   // tile dove sta l'agente
-            const destKey  = `${x + dx}_${y + dy}`;
-            return behindOk && slotSet.has(destKey);
-        });
-        if (!hasEscape) dead.add(key);
+    const alive = new Set(slots);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const key of [...alive]) {
+            const [x, y] = key.split('_').map(Number);
+            const hasEscape = DIRECTIONS.some(({ dx, dy }) => {
+                const behindOk = !isWall(mapTiles, x - dx, y - dy);   // tile dove sta l'agente
+                const destKey  = `${x + dx}_${y + dy}`;
+                return behindOk && alive.has(destKey);
+            });
+            if (!hasEscape) { alive.delete(key); changed = true; }
+        }
     }
 
-    return dead;
+    return new Set(slots.filter(k => !alive.has(k)));
 }
 
 /**
