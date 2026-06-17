@@ -16,6 +16,8 @@ export const beliefs = {
     config:         {},
     mapTiles:       new Map(),
     isDirectionalMap: false,
+    isCrateMap:     false,
+    crateTiles:     new Map(),   // "x_y" → {x, y}
     deliveryPoints: [],
     parcels:        new Map(),
     agents:         new Map(),   // id → { x, y, moving, direction, targetX, targetY }
@@ -33,10 +35,25 @@ export const beliefs = {
     //   role:     'collector' | 'postman' | null (staffetta, task 2)
     coord: null,
 
+    // "x_y" → target per cui il solver PDDL ha confermato che non esiste
+    // nessun piano (mappa con casse) — esclusi in modo permanente dalle opzioni.
+    unreachableCrateTargets: new Set(),
+
+    // true quando per NESSUN target esiste un piano possibile: l'agente
+    // smette di deliberare (vedi haltAgent()).
+    halted: false,
 };
 
 export function updateConfig(config) {
     beliefs.config = config;
+}
+
+// Ferma definitivamente la deliberazione dell'agente: nessun target è
+// raggiungibile su questa mappa con la configurazione attuale delle casse.
+export function haltAgent(reason) {
+    if (beliefs.halted) return;
+    beliefs.halted = true;
+    console.error(`[BDI] ESECUZIONE BLOCCATA — ${reason}`);
 }
 
 export function updateMap(width, height, tiles) {
@@ -56,8 +73,14 @@ export function updateMap(width, height, tiles) {
         beliefs.mapTiles.set(key, { type: String(tile.type) });
         if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
         if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
+        if (tile.type === '5!' || tile.type === '5') {
+            beliefs.isCrateMap = true;
+        }
+        if (tile.type === '5!') {
+            beliefs.crateTiles.set(key, { x: tile.x, y: tile.y });
+        }
         //console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
-        
+
     }
 
     // --- 2. Precalcola spawnVisibility ---
@@ -108,8 +131,8 @@ export function formatMap(beliefs) {
             case '2':  return 'D';   // delivery
             case '3':  return '·';   // calpestabile
             case '4':  return 'B';   // base
-            case '5':
-            case '5!': return '▒';   // crate
+            case '5':   return '▒';   // crate
+            case '5!': return '[]';   // crate
             default:   return ARROWS.has(type) ? type : '?';
         }
     };
@@ -346,4 +369,111 @@ export function deliverableIds(beliefs) {
         parcels = [...parcels].sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0)).slice(0, N);
     }
     return parcels.map(p => p.id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Riconcilia la posizione delle casse con lo stato reale del server.
+// Va chiamata ad ogni onSensing, DOPO updateSensing().
+// Usa sensing.crates se disponibile, altrimenti inferisce dalle tile visibili.
+// ─────────────────────────────────────────────────────────────────────────────
+export function updateCrates(sensing) {
+    if (!beliefs.isCrateMap) return;
+
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+    const me = beliefs.me;
+    const mx = Math.round(me.x);
+    const my = Math.round(me.y);
+
+    // Correzione immediata: l'agente non può fisicamente stare su una cella
+    // con una cassa. Se crateTiles la marca occupata è uno stato stale
+    // (es. un altro agente l'ha spostata) — rimuovila subito, non solo
+    // a livello di generazione del problema PDDL.
+    const selfKey = `${mx}_${my}`;
+    if (beliefs.crateTiles.has(selfKey)) {
+        beliefs.crateTiles.delete(selfKey);
+        beliefs.mapTiles.set(selfKey, { type: '5' });
+        // FIX: una cassa che si sposta può liberare il percorso verso QUALSIASI
+        // target prima escluso, non solo verso la propria vecchia posizione —
+        // resettiamo tutta l'esclusione invece della sola chiave selfKey.
+        if (beliefs.unreachableCrateTargets.size > 0) {
+            console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+            beliefs.unreachableCrateTargets.clear();
+        }
+        console.log(`[BELIEFS] cassa rimossa da (${mx},${my}) — l'agente è su quella cella`);
+    }
+
+    // --- Strategia A: il server manda sensing.crates ---
+    if (sensing.crates && sensing.crates.length > 0) {
+        const serverCrateKeys = new Set(
+            sensing.crates.map(c => `${Math.round(c.x)}_${Math.round(c.y)}`)
+        );
+
+        for (const [key, tile] of beliefs.mapTiles.entries()) {
+            if (tile.type !== '5' && tile.type !== '5!') continue;
+            const [x, y] = key.split('_').map(Number);
+            if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue; // fuori vista
+
+            const serverHasCrate = serverCrateKeys.has(key);
+            const weThinkHasCrate = beliefs.crateTiles.has(key);
+
+            if (weThinkHasCrate && !serverHasCrate) {
+                beliefs.crateTiles.delete(key);
+                beliefs.mapTiles.set(key, { type: '5' });
+                if (beliefs.unreachableCrateTargets.size > 0) {
+                    console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+                    beliefs.unreachableCrateTargets.clear();
+                }
+                console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — riconciliazione server`);
+            }
+            if (!weThinkHasCrate && serverHasCrate) {
+                beliefs.crateTiles.set(key, { x, y });
+                beliefs.mapTiles.set(key, { type: '5!' });
+                console.log(`[BELIEFS] cassa aggiunta a (${x},${y}) — riconciliazione server`);
+            }
+        }
+        return;
+    }
+
+    // --- Strategia B: sensing.crates non disponibile → usa sensing.positions ---
+    // Le positions sono le tile percorribili visibili nel raggio di osservazione.
+    if (!sensing.positions || sensing.positions.length === 0) return;
+
+    const walkableVisible = new Set(
+        sensing.positions.map(p => `${Math.round(p.x)}_${Math.round(p.y)}`)
+    );
+
+    // B1: rimuovi casse in '5!' che ora sono walkable (cassa spostata via)
+    // Usa snapshot per evitare problemi di modifica durante iterazione.
+    for (const [key] of [...beliefs.crateTiles.entries()]) {
+        const [x, y] = key.split('_').map(Number);
+        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue;
+        if (walkableVisible.has(key)) {
+            beliefs.crateTiles.delete(key);
+            beliefs.mapTiles.set(key, { type: '5' });
+            if (beliefs.unreachableCrateTargets.size > 0) {
+                console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+                beliefs.unreachableCrateTargets.clear();
+            }
+            console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — tile ora walkable (fallback positions)`);
+        }
+    }
+
+    // B2: aggiungi casse in slot '5' non walkable e non occupati da agenti.
+    // Un '5' nel raggio visivo che il server non riporta come walkable e non
+    // è occupato da un agente noto deve avere una cassa (es. dopo restart).
+    const agentKeys = new Set(
+        [...beliefs.agents.values()].map(a => `${Math.round(a.x)}_${Math.round(a.y)}`)
+    );
+    agentKeys.add(`${mx}_${my}`); // l'agente stesso non è in beliefs.agents
+
+    for (const [key, tile] of beliefs.mapTiles.entries()) {
+        if (tile.type !== '5') continue;
+        const [x, y] = key.split('_').map(Number);
+        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue;
+        if (!walkableVisible.has(key) && !agentKeys.has(key)) {
+            beliefs.crateTiles.set(key, { x, y });
+            beliefs.mapTiles.set(key, { type: '5!' });
+            console.log(`[BELIEFS] cassa rilevata a (${x},${y}) — slot non walkable (inferenza positions)`);
+        }
+    }
 }

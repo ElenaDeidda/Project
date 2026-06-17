@@ -1,8 +1,12 @@
-// plans.js - Piani eseguibili. Il socket viene passato nel costruttore.
+// plans.js — Piani per mappe NORMALI (senza casse) + piani di coordinamento di team.
+// Per mappe con casse (isCrateMap) vedere plans_crate.js.
+//
+// La planLibrary finale unisce entrambi i file: i piani crate vengono
+// messi PRIMA così hanno priorità (isApplicableTo controlla isCrateMap).
+
 import { beliefs, deliverableIds, getBlockedCells } from './beliefs.js';
 import { navigateTo, reachableDistances } from './moves.js';
-import { smartDist } from './basic_functions.js';
-import { getPddlPlan, planToMoves } from './pddl_planner.js';
+import { planLibraryCrate } from './plans_crate.js';
 import {
     markArrived, isRendezvousDone, endRendezvous,
     nearestReachableWithinDist, nearestRowTile, freeNeighborOf,
@@ -33,6 +37,11 @@ function nearestDeliveryPoint() {
     return best ?? beliefs.deliveryPoints[0] ?? null;
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BASE
+// ─────────────────────────────────────────────────────────────────────────────
+
 class PlanBase {
     #stopped = false;
     get stopped()    { return this.#stopped; }
@@ -40,10 +49,15 @@ class PlanBase {
     stop()           { this.#stopped = true; }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GoPickUp — raccolta pacco su mappa normale (sempre A*)
+// ─────────────────────────────────────────────────────────────────────────────
+
 export class GoPickUp extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
-    static isApplicableTo(action) { return action === 'go_pick_up'; }
+    static isApplicableTo(action) { return action === 'go_pick_up' && !beliefs.isCrateMap; }
 
     async execute(_action, x, y, id) {
         if (this.stopped) throw ['stopped'];
@@ -51,149 +65,52 @@ export class GoPickUp extends PlanBase {
         const parcel = beliefs.parcels.get(id);
         if (!parcel || parcel.carriedBy) throw [`Pacco ${id} non disponibile`];
 
-        console.log(`[PLANS] GoPickUp -> (${x},${y})`);
-        const nav = await navigateTo(beliefs.me, {x, y}, this.#socket, beliefs.mapTiles, this.shouldStop);
+        console.log(`[PLANS] GoPickUp A* → (${x},${y})`);
+        const nav = await navigateTo(beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
-        if (this.stopped) throw ['stopped'];
-        // Potrebbe essere gia stato raccolto opportunisticamente durante il tragitto
-        if (beliefs.carriedParcels.some(p => p.id === id)) {
-            // console.log(`[PLANS] Pacco ${id} gia raccolto in transito`);
-            return true;
-        }
+        if (this.stopped)      throw ['stopped'];
+
+        if (beliefs.carriedParcels.some(p => p.id === id)) return true;
 
         const freshParcel = beliefs.parcels.get(id);
-        if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito durante la navigazione`];
+        if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito`];
 
         const picked = await this.#socket.emitPickup();
-        console.log(`[PLANS] - GoPickUp -> picked = ${picked}`)
         if (!picked || picked.length === 0) throw [`Pickup vuoto in (${x},${y})`];
-
         beliefs.carrying       = true;
         beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
-
-        // console.log(`[PLANS] Raccolti ${picked.length} pacchi`);
         return true;
     }
 }
-/*
-export class GoPickUp extends PlanBase {
-    #socket;
-    constructor(socket) { super(); this.#socket = socket; }
-    static isApplicableTo(action) { return action === 'go_pick_up'; }
 
-    async execute(_action, x, y, id) {
-        if (this.stopped) throw ['stopped'];
 
-        const parcel = beliefs.parcels.get(id);
-        if (!parcel || parcel.carriedBy) throw [`Pacco ${id} non disponibile`];
+// ─────────────────────────────────────────────────────────────────────────────
+// Deliver — consegna pacco su mappa normale
+// ─────────────────────────────────────────────────────────────────────────────
 
-        // ── TENTATIVO PDDL ────────────────────────────────────────────────
-        // getPddlPlan ritorna null se USE_PDDL=false o se il solver fallisce.
-        // Passiamo gli agenti nemici come ostacoli (se li hai nei beliefs).
-        const enemies = beliefs.agents ? [...beliefs.agents.values()] : [];
-        const rawPlan = await getPddlPlan(beliefs.me, beliefs.mapTiles, beliefs.parcels, id, enemies);
-
-        if (rawPlan) {
-            // console.log(`[PLANS] GoPickUp PDDL -> (${x},${y})`);
-            const moves = planToMoves(rawPlan);
-            let pddlOk = true;
-
-            for (const move of moves) {
-                if (this.stopped) throw ['stopped'];
-
-                if (move === 'pickup') {
-                    const picked = await this.#socket.emitPickup();
-                    if (picked && picked.length > 0) {
-                        beliefs.carrying       = true;
-                        beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
-                    }
-                } else if (move === 'putdown') {
-                    await this.#socket.emitPutdown();
-                } else {
-                    const result = await this.#socket.emitMove(move);
-                    if (result?.x != null) {
-                        beliefs.me.x = result.x;
-                        beliefs.me.y = result.y;
-                    } else {
-                        // Passo rifiutato (nemico sulla tile) -> abbandona PDDL, usa A*
-                        // console.warn(`[PLANS] PDDL: passo '${move}' rifiutato - fallback A*`);
-                        pddlOk = false;
-                        break;
-                    }
-                }
-            }
-
-            // Se il piano PDDL e andato a buon fine fino in fondo, abbiamo finito.
-            // (controlliamo se il pacco target e stato effettivamente raccolto)
-            if (pddlOk) {
-                if (beliefs.carriedParcels.some(p => p.id === id)) {
-                    // console.log(`[PLANS] PDDL: pacco ${id} raccolto`);
-                    return true;
-                }
-                // PDDL finito ma pacco non raccolto: prova un pickup finale
-                const picked = await this.#socket.emitPickup();
-                if (picked && picked.length > 0) {
-                    beliefs.carrying       = true;
-                    beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
-                    return true;
-                }
-            }
-            // Altrimenti cadiamo nel ramo A* qui sotto.
-        }
-
-        // ── FALLBACK A* ───────────────────────────────────────────────────
-        // Raggiunto se: USE_PDDL=false, solver in timeout, o passo PDDL rifiutato.
-        // console.log(`[PLANS] GoPickUp A* -> (${x},${y})`);
-        const nav = await navigateTo(beliefs.me, {x, y}, this.#socket, beliefs.mapTiles, this.shouldStop);
-        if (nav === 'stopped') throw ['stopped'];
-        if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
-        if (this.stopped) throw ['stopped'];
-
-        // Potrebbe essere gia stato raccolto opportunisticamente durante il tragitto
-        if (beliefs.carriedParcels.some(p => p.id === id)) {
-            // console.log(`[PLANS] Pacco ${id} gia raccolto in transito`);
-            return true;
-        }
-
-        const freshParcel = beliefs.parcels.get(id);
-        if (!freshParcel || freshParcel.carriedBy) throw [`Pacco ${id} sparito durante la navigazione`];
-
-        const picked = await this.#socket.emitPickup();
-        // console.log(`[PLANS] - GoPickUp -> picked = ${picked}`);
-        if (!picked || picked.length === 0) throw [`Pickup vuoto in (${x},${y})`];
-
-        beliefs.carrying       = true;
-        beliefs.carriedParcels = [...beliefs.carriedParcels, ...picked];
-
-        // console.log(`[PLANS] Raccolti ${picked.length} pacchi`);
-        return true;
-    }
-}
-*/
 export class Deliver extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
-    static isApplicableTo(action) { return action === 'deliver'; }
+    static isApplicableTo(action) { return action === 'deliver' && !beliefs.isCrateMap; }
 
     async execute(_action, x, y) {
         if (this.stopped) throw ['stopped'];
-
         if (!beliefs.carrying && beliefs.carriedParcels.length === 0)
-            throw ['Deliver chiamato senza pacchi da consegnare'];
+            throw ['Deliver chiamato senza pacchi'];
 
-        // console.log(`[PLANS] Deliver -> (${x},${y})`);
-        const nav = await navigateTo(beliefs.me, {x, y}, this.#socket, beliefs.mapTiles, this.shouldStop);
+        console.log(`[PLANS] Deliver A* → (${x},${y})`);
+        const nav = await navigateTo(beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop);
         if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
-        if (this.stopped) throw ['stopped'];
+        if (this.stopped)      throw ['stopped'];
 
         // Consegna SELETTIVA secondo le regole attive (max_deliver_reward,
         // stack_size). Senza regole -> tutti i pacchi.
         const ids = deliverableIds(beliefs);
         if (ids.length === 0) return true;   // nulla di consegnabile (es. tutti > soglia)
-        const dropped = await this.#socket.emitPutdown(ids);
 
+        const dropped = await this.#socket.emitPutdown(ids);
         const set = new Set(ids);
         beliefs.carriedParcels = beliefs.carriedParcels.filter(p => !set.has(p.id));
         beliefs.carrying       = beliefs.carriedParcels.length > 0;
@@ -202,35 +119,35 @@ export class Deliver extends PlanBase {
     }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GoToSpawn — raggiunge una spawn tile su mappa normale
+// ─────────────────────────────────────────────────────────────────────────────
+
 export class GoToSpawn extends PlanBase {
     #socket;
     constructor(socket) { super(); this.#socket = socket; }
-    static isApplicableTo(action) { return action === 'go_to_spawn'; }
+    static isApplicableTo(action) { return action === 'go_to_spawn' && !beliefs.isCrateMap; }
 
     async execute(_action, x, y) {
         if (this.stopped) throw ['stopped'];
 
-        // Fallback: tutte le spawn tile erano bloccate, aspetta fermo
         if (x == null || y == null) {
             await new Promise(r => setTimeout(r, 300));
             return true;
         }
 
-        console.log(`[PLANS] GoToSpawn -> (${x},${y})`);
-        const nav = await navigateTo(
-            beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop
-        );
+        console.log(`[PLANS] GoToSpawn A* → (${x},${y})`);
+        const nav = await navigateTo(beliefs.me, { x, y }, this.#socket, beliefs.mapTiles, this.shouldStop);
 
-        if (nav === 'stopped') {
-            console.log(`[PLANS] GoToSpawn INTERROTTO verso (${x},${y}) - ora \@ (${Math.round(beliefs.me.x)},${Math.round(beliefs.me.y)})`);
-            throw ['stopped'];
-        }
+        if (nav === 'stopped') throw ['stopped'];
         if (nav === 'failed')  throw [`Navigazione fallita verso (${x},${y})`];
 
         await new Promise(r => setTimeout(r, 300));
         return true;
     }
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PIANI DI COORDINAMENTO (livello 3)
@@ -404,7 +321,14 @@ export class RelayFetch extends PlanBase {
     }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// planLibrary — piani crate PRIMA (hanno isApplicableTo con isCrateMap),
+//               poi piani normali, infine i piani di coordinamento di team.
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const planLibrary = [
+    ...planLibraryCrate,   // GoPickUpCrate, DeliverCrate, GoToSpawnCrate
     GoPickUp, Deliver, GoToSpawn,
     GoNearAndWait, GoToRowAndWait, RelayDrop, RelayFetch,
 ];
