@@ -1,8 +1,9 @@
 import { DjsConnect } from "@unitn-asa/deliveroo-js-sdk/client";
-import { beliefs, updateConfig, updateMap, updateSensing } from './beliefs.js';
+import { beliefs, updateConfig, updateMap, updateSensing, updateCrates } from './beliefs.js';
 import { generateOptions, deliberate } from './options.js';
 import { IntentionRevision }           from './intentions.js';
 import { initCoordination, relayInterceptDeliver } from './coordination.js';
+import { formatMap }                  from './beliefs.js';
 import dotenv from 'dotenv';
 import fs from 'fs';
 
@@ -139,12 +140,15 @@ function pushNext() {
 // Registra sensing DOPO che beliefs.me.id è garantito impostato da onYou
 socket.onSensing( (s) => {
     updateSensing(s);
+    updateCrates(s);    // riconcilia posizione casse col server
+    if (beliefs.halted) return;
     pushNext();
 });
 
+console.log(formatMap(beliefs));
 // --- Safety net: delibera ogni 200ms anche senza nuovi eventi sensing ---
 // Utile quando un pacco sparisce per timer (non arriva nessun sensing)
-while (true) {
+while (!beliefs.halted) {
     pushNext();
     await new Promise(r => setTimeout(r, 200));
 }
