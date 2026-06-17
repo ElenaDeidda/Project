@@ -12,9 +12,9 @@
 //   3) RED LIGHT   - tutti su una riga DISPARI, poi freeze finche non arriva il
 //                    messaggio "green" (relay dell'LLM) -> ripartono; "red" -> fermi.
 
-import { beliefs, getBlockedCells, deliverableIds } from './beliefs.js';
+import { beliefs, getBlockedCells, deliverableIds } from '../bdi/beliefs.js';
 import { initComms, broadcast, sendTo, onTeamMessage, getTeammates } from './communication.js';
-import { reachableDistances } from './moves.js';
+import { reachableDistances } from '../bdi/moves.js';
 
 let _socket = null;
 let _started = false;
