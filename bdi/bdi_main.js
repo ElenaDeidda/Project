@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 
 // Cerca .env.bdi specifico per il BDI, altrimenti usa .env condiviso.
-const envFile = fs.existsSync('.env.bdi') ? '.env.bdi' : '.env';
+const envFile = fs.existsSync('bdi/.env.bdi') ? 'bdi/.env.bdi' : '.env';
 dotenv.config({ path: envFile, override: true });
 console.log(`[BDI] env caricato da ${envFile}`);
 
