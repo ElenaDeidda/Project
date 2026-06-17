@@ -26,6 +26,16 @@ function crateStateHash(beliefs) {
     return [...beliefs.crateTiles.keys()].sort().join(',');
 }
 
+// Ultima configurazione-casse che ha permesso di raggiungere con successo
+// un target (via A* diretto o dopo un piano PDDL). Stabile dopo 1 successo:
+// se le casse divergono da questa configurazione, si tenta il ripristino
+// (pochi push) prima di richiedere al solver un piano completamente nuovo.
+const knownGoodConfig = new Map();   // "tx_ty" → string[] (sorted crateTiles keys)
+
+function snapshotCrateKeys(beliefs) {
+    return [...beliefs.crateTiles.keys()].sort();
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. HELPERS
@@ -106,7 +116,7 @@ function buildDomain() {
 //    Usiamo invece Set + Array manuale, che è concettualmente identico.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildProblem(beliefs, targetX, targetY) {
+function buildInitFacts(beliefs) {
     const agentKey = `${Math.round(beliefs.me.x)}_${Math.round(beliefs.me.y)}`;
     const objects  = new Set(['agent1']);
     const facts    = [];
@@ -158,6 +168,12 @@ function buildProblem(beliefs, targetX, targetY) {
         facts.push(`(crate-slot ${tid})`);
     }
 
+    return { objects, facts };
+}
+
+function buildProblem(beliefs, targetX, targetY) {
+    const { objects, facts } = buildInitFacts(beliefs);
+
     const targetTile = tileId(targetX, targetY);
     objects.add(targetTile);
 
@@ -168,6 +184,23 @@ function buildProblem(beliefs, targetX, targetY) {
     ${facts.join('\n    ')}
   )
   (:goal (at agent1 ${targetTile}))
+)`;
+}
+
+function buildRestoreProblem(beliefs, goodConfigKeys) {
+    const { objects, facts } = buildInitFacts(beliefs);
+    const goalFacts = goodConfigKeys.map(key => {
+        const [x, y] = key.split('_').map(Number);
+        return `(crate-at ${tileId(x, y)})`;
+    });
+
+    return `(define (problem crate-restore)
+  (:domain crate-world)
+  (:objects ${[...objects].join(' ')})
+  (:init
+    ${facts.join('\n    ')}
+  )
+  (:goal (and ${goalFacts.join(' ')}))
 )`;
 }
 
@@ -205,6 +238,59 @@ async function callSolver(beliefs, targetX, targetY) {
     console.log(`[PDDL_CREATES] Piano trovato: ${rawPlan.length} passi`);
     planCache.set(cacheKey, rawPlan);
     return rawPlan;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4bis. RIPRISTINO — riporta le casse a una configurazione nota buona,
+//       senza muovere l'agente verso un target finale. Best-effort: se
+//       fallisce in qualsiasi punto, l'esecutore prosegue con il piano
+//       PDDL pieno verso il target reale.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function tryRestoreConfig(beliefs, socket, goodConfigKeys, shouldStop) {
+    const domain  = buildDomain();
+    const problem = buildRestoreProblem(beliefs, goodConfigKeys);
+
+    let rawPlan;
+    try {
+        rawPlan = await Promise.race([
+            onlineSolver(domain, problem),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout restore')), PDDL_TIMEOUT_MS)),
+        ]);
+    } catch (err) {
+        console.warn('[PDDL_CREATES] Ripristino: solver fallito:', err.message);
+        return false;
+    }
+
+    if (!rawPlan || rawPlan.length === 0) return false;
+
+    const executionPlan = buildExecutionPlan(rawPlan);
+    for (const step of executionPlan) {
+        if (shouldStop()) return false;
+
+        if (step.type === 'push') {
+            const result = await socket.emitMove(step.direction);
+            if (result?.x == null) return false;   // push rifiutato → ripristino fallito
+
+            beliefs.me.x = result.x;
+            beliefs.me.y = result.y;
+
+            const fromKey = `${step.crateFrom.x}_${step.crateFrom.y}`;
+            const toKey   = `${step.crateTo.x}_${step.crateTo.y}`;
+            beliefs.crateTiles.delete(fromKey);
+            beliefs.crateTiles.set(toKey, step.crateTo);
+            beliefs.mapTiles.set(fromKey, { type: '5'  });
+            beliefs.mapTiles.set(toKey,   { type: '5!' });
+            continue;
+        }
+
+        if (step.type === 'astar') {
+            const outcome = await navigateTo(beliefs.me, step.target, socket, beliefs.mapTiles, shouldStop, ASTAR_RETRY);
+            if (outcome !== 'reached') return false;
+        }
+    }
+    return true;
 }
 
 
@@ -293,9 +379,33 @@ export async function execCratePlan(beliefs, socket, targetX, targetY, shouldSto
     if (direct === 'stopped') return false;
     if (direct === 'reached') {
         console.log(`[PDDL_CREATES] ✅ Arrivato a (${targetX},${targetY}) via A* diretto — PDDL non necessario`);
+        knownGoodConfig.set(`${Math.round(targetX)}_${Math.round(targetY)}`, snapshotCrateKeys(beliefs));
         return true;
     }
     console.log(`[PDDL_CREATES] A* diretto bloccato verso (${targetX},${targetY}) — richiedo piano PDDL`);
+
+    /** Configurazione nota buona per questo target: tenta ripristino prima
+     *  di un piano PDDL pieno (single-agent: il drift è solo NPC) */
+    const targetKey  = `${Math.round(targetX)}_${Math.round(targetY)}`;
+    const goodConfig = knownGoodConfig.get(targetKey);
+    if (goodConfig) {
+        const currentConfig = snapshotCrateKeys(beliefs);
+        if (goodConfig.join(',') !== currentConfig.join(',')) {
+            console.log(`[PDDL_CREATES] configurazione nota per (${targetX},${targetY}) divergente — tento ripristino`);
+            const restored = await tryRestoreConfig(beliefs, socket, goodConfig, shouldStop);
+            if (restored) {
+                const retryDirect = await navigateTo(
+                    beliefs.me, { x: targetX, y: targetY }, socket, beliefs.mapTiles, shouldStop, ASTAR_RETRY,
+                );
+                if (retryDirect === 'reached') {
+                    console.log(`[PDDL_CREATES] ✅ Arrivato a (${targetX},${targetY}) dopo ripristino configurazione — solver non necessario`);
+                    knownGoodConfig.set(targetKey, snapshotCrateKeys(beliefs));
+                    return true;
+                }
+            }
+            console.log('[PDDL_CREATES] ripristino non risolutivo — procedo con piano PDDL pieno');
+        }
+    }
 
     /** Primo piano PDDL */
     let rawPlan = null;
@@ -395,5 +505,10 @@ export async function execCratePlan(beliefs, socket, targetX, targetY, shouldSto
                     Math.round(beliefs.me.y) === Math.round(targetY);
 
     console.log(`[PDDL_CREATES] ${arrived ? '✅ Arrivato' : '⚠️  Non arrivato'} a (${targetX},${targetY})`);
+
+    if (arrived) {
+        knownGoodConfig.set(`${Math.round(targetX)}_${Math.round(targetY)}`, snapshotCrateKeys(beliefs));
+    }
+
     return arrived;
 }
