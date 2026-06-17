@@ -5,14 +5,44 @@ function heuristic(a, b) {
     return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
+
 class MinHeap {
     #data = [];
+    get size() { return this.#data.length; }
+
     push(item) {
-        this.#data.push(item);
-        this.#data.sort((a, b) => a.f - b.f);
+        const a = this.#data;
+        a.push(item);
+        let i = a.length - 1;
+        while (i > 0) {                       // sift-up: risale finché < del padre
+            const p = (i - 1) >> 1;
+            if (a[p].f <= a[i].f) break;
+            [a[p], a[i]] = [a[i], a[p]];
+            i = p;
+        }
     }
-    pop()        { return this.#data.shift(); }
-    get size()   { return this.#data.length; }
+
+    pop() {
+        const a = this.#data;
+        if (a.length === 0) return undefined;
+        const top = a[0];                     // il minimo è sempre in cima
+        const last = a.pop();
+        if (a.length > 0) {
+            a[0] = last;
+            let i = 0;
+            const n = a.length;
+            while (true) {                    // sift-down: scende verso il figlio minore
+                const l = 2*i + 1, r = 2*i + 2;
+                let m = i;
+                if (l < n && a[l].f < a[m].f) m = l;
+                if (r < n && a[r].f < a[m].f) m = r;
+                if (m === i) break;
+                [a[i], a[m]] = [a[m], a[i]];
+                i = m;
+            }
+        }
+        return top;
+    }
 }
 
 const ARROW_TYPES = new Set(['→', '←', '↑', '↓']);
