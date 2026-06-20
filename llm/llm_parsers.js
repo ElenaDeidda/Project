@@ -1,7 +1,5 @@
 // llm_parsers.js
-// Parsing PURO di testo/JSON prodotto dall'LLM: estrazione del piano, dei nomi
-// azione, delle coordinate e dell'intento JSON. Nessuna dipendenza, nessun
-// effetto collaterale.
+// Parsing puro di testo/JSON dell'LLM: piano, nomi azione, coordinate, intento JSON.
 
 /**
  * Estrae il final answer dal testo dell'LLM. Cerca "FINAL ANSWER: ...".
@@ -13,16 +11,14 @@ function extractFinalAnswer(text) {
 }
 
 /**
- * Estrae il piano dal testo dell'LLM. Tollerante alle variazioni di formato:
- * accetta "1. action: target", "1) action: target", "Step 1: action: target",
- * "- action: target". Isola la sezione dopo un header "PLAN:" (se presente) e
- * ignora la coda "FINAL ANSWER: ...".
+ * Estrae il piano dal testo dell'LLM, tollerante alle variazioni di formato
+ * (numerazione, bullet). Isola la sezione "PLAN:" e ignora "FINAL ANSWER: ...".
  * @returns {Array<{action: string, target: string, description: string}>}
  */
 function parsePlan(llmText, startIndex = 0) {  // eslint-disable-line no-unused-vars
     const text = String(llmText || '');
 
-    // Isola il corpo del piano: preferisci cio che segue un header "PLAN..:".
+    // Isola il corpo del piano: preferisci cio che segue "PLAN:".
     let body = text;
     const planMatch = text.match(/PLAN[^\n]*\n([\s\S]*?)(?:\n\s*FINAL ANSWER:|$)/i);
     if (planMatch) {

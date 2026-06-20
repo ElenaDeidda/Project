@@ -10,11 +10,9 @@ function realDist(dist, x, y) {
 
 const VISIBILITY_BONUS = 2;
 // ─── Raccolta multi-pacco adattiva ─────────────────────────────────────────
-// N = quanti "pacchi di valore medio" accumulare prima di consegnare
-// (consegna quando valore_portato >= N × avg_reward).
-//
-// N viene inizializzato UNA SOLA VOLTA dalla config (decadimento + capacita)
-// e poi NON viene mai resettato: si adatta in corso di partita.
+// N = quanti pacchi di valore medio accumulare prima di consegnare (consegna
+// quando valore_portato >= N × avg_reward). Inizializzato una volta dalla
+// config, poi si adatta in corso di partita (mai resettato).
 const N_MIN             = 1;      // non si scende mai sotto 1× avg_reward
 const N_REDUCE_STEP     = 0.5;    // quanto cala N su un trigger forzato
 const N_INCREASE_STEP   = 0.5;    // quanto sale N dopo una consegna "pulita"
@@ -41,8 +39,8 @@ function capacityCap() {
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // ─── stack_size (regola L2) ─────────────────────────────────────────────────
-// Esposto via beliefs.activeRules dal processo LLM. main.js non lo imposta ->
-// null -> comportamento normale. E limitato dalla capacita reale.
+// Da beliefs.activeRules (null in main.js → comportamento normale). Limitato
+// dalla capacita reale.
 function stackSizeEffective() {
     const n = beliefs.activeRules?.stackSize;
     if (!Number.isInteger(n)) return null;
@@ -55,14 +53,13 @@ function logStackOpt(msg) {
     console.log(`[STACK] ${msg}`);
 }
 
-// Fallback dello stack "consegna comunque": se un pacco e sceso di questa
-// frazione rispetto al valore con cui e stato RACCOLTO, consegna il parziale
-// (per non perdere i punti). 0.60 = consegna quando un pacco vale < 40% di
-// quando l'ho preso. Override con STACK_DECAY_DROP nel .env.
+// Fallback "consegna comunque": se un pacco scende di questa frazione rispetto
+// al valore di raccolta, consegna il parziale. Override con STACK_DECAY_DROP
+// nel .env.
 const STACK_DECAY_DROP = Number(process.env.STACK_DECAY_DROP) || 0.60;
 
-// true se almeno un pacco portato e sceso >= STACK_DECAY_DROP del suo valore di
-// raccolta (cioe vale < (1 - drop) × originale).
+// true se almeno un pacco portato e sceso >= STACK_DECAY_DROP del valore di
+// raccolta.
 function aParcelDecayedTooMuch() {
     const cr = beliefs.collectedReward;
     if (!cr) return false;
@@ -86,8 +83,7 @@ function logDeliverRule(msg) {
 }
 
 
-// Modello di decadimento condiviso tra N (computeInitialN) e scoreParcel,
-// cosi i due ragionano sullo stesso "valore nel tempo".
+// Modello di decadimento condiviso tra computeInitialN e scoreParcel.
 function decayMsFromConfig() {
     return parseIntervalMs(beliefs.config.GAME?.parcels?.decaying_event);
 }
@@ -99,9 +95,8 @@ function decayPerStep() {
     return Number.isFinite(decayMs) ? moveDur / decayMs : 0;
 }
 
-// Valore iniziale di N derivato dalla dinamica di gioco:
-//   quanti pacchi riesco a raccogliere prima che il primo perda
-//   (1 - DECAY_THRESHOLD) del suo valore, limitato dalla capacita.
+// N iniziale: quanti pacchi raccolgo prima che il primo perda
+// (1 - DECAY_THRESHOLD) del suo valore, limitato dalla capacita.
 function computeInitialN() {
     const cfg       = beliefs.config.GAME ?? {};
     const avgReward = cfg.parcels?.reward_avg          ?? 10;
@@ -122,18 +117,15 @@ function computeInitialN() {
 }
 
 // ─── Pattugliamento spawn ───────────────────────────────────────────────────
-// Quando non ci sono pacchi da raccogliere l'agente sosta sulla zona spawn
-// migliore; se dopo un timeout (legato al ritmo di generazione) non vede ancora
-// pacchi attorno, marca quella zona come "esausta" e si riloca su un'altra.
+// Senza pacchi da raccogliere, l'agente sosta sulla zona spawn migliore; dopo
+// un timeout senza pacchi attorno la marca "esausta" e si riloca.
 const PATROL_TIMEOUT_FACTOR   = 2;     // timeout = factor × intervallo di generazione
 const PATROL_TIMEOUT_FALLBACK = 4000;  // ms, se generation_event non e leggibile
 const EXHAUST_COOLDOWN_FACTOR = 3;     // per quanto una zona resta esclusa (× timeout)
 
 // ─── Minaccia nemici sulle spawn zone (modello probabilistico) ───────────────
-// Invece di "c'e un nemico vicino -> penalita fissa", stimiamo la PROBABILITA che
-// una spawn tile sia "contesa", combinando vicinanza del nemico e allineamento
-// del suo heading verso quella tile. Le zone dove i nemici stanno andando
-// perdono punteggio -> l'agente preferisce la zona libera ("migliore").
+// Stima la P che una spawn tile sia "contesa" combinando vicinanza del nemico
+// e allineamento del suo heading verso la tile; le zone contese perdono punti.
 const ENEMY_THREAT_PENALTY = 8;        // peso della penalita per zona contesa (P∈[0,1] × questo)
 const STATIONARY_WEIGHT    = 0.5;      // un nemico fermo conta come minaccia parziale (non sa dove va)
 // versori di heading coerenti con updateAgents (right:+x, left:-x, up:+y, down:-y)
@@ -154,8 +146,7 @@ function patrolTimeout() {
 }
 
 function resetCollection() {
-    // Consegna "pulita" (soglia/capacita) -> su questa mappa conviene accumulare
-    // un po' di piu: alza N (adattamento bidirezionale).
+    // Consegna "pulita" (soglia/capacita) -> alza N (adattamento bidirezionale).
     if (deliverReason === 'threshold' && N_current !== null) {
         N_current = clamp(N_current + N_INCREASE_STEP, N_MIN, capacityCap());
         console.log(`[OPTIONS] Consegna pulita -> N = ${N_current.toFixed(1)}`);
@@ -182,12 +173,9 @@ function shouldDeliver() {
     const stackN = stackSizeEffective();   // null se nessuna regola stack_size
 
     // ─── max_deliver_reward: consegnare un pacco > T da 0 ────────────────────
-    // Strategia "a pacco": consegno OGNI pacco nell'istante in cui decade a ~T
-    // (massimo valore consentito). Il trigger guarda il pacco PIU BASSO (il piu
-    // vicino a T, cioe il piu urgente): quando arrivera a <= T parto verso la
-    // delivery. La consegna selettiva (moves.js/plans.js via deliverableIds)
-    // molla TUTTI i <= T e TIENE i > T per il giro successivo, cosi ogni pacco
-    // esce a ~T e i piccoli non decadono fino a 0 aspettando i grandi.
+    // Strategia "a pacco": consegno ogni pacco quando decade a ~T. Il trigger
+    // guarda il pacco piu basso (il piu urgente): quando arrivera a <= T parto.
+    // La consegna selettiva molla i <= T e tiene i > T per il giro dopo.
     const delT = maxDeliverEffective();
     if (delT != null) {
         if (deliverLatch) return true;
@@ -232,9 +220,8 @@ function shouldDeliver() {
         return (deliverLatch = true);
     }
 
-    // 2. Trigger: troppo tempo senza raccogliere nuovi pacchi -> consegna + abbassa N.
-    //    SALTATO in modalita stack: li il fallback per consegnare un parziale e il
-    //    DECAY (trigger 3), non un timeout fisso.
+    // 2. Trigger: troppo tempo senza nuovi pacchi -> consegna + abbassa N.
+    //    Saltato in modalita stack (li il fallback parziale e il decay, trigger 3).
     if (stackN == null && now - lastPickupTime > NO_PICKUP_TIMEOUT) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
         console.log(`[OPTIONS] ${NO_PICKUP_TIMEOUT}ms senza pickup -> consegna, N = ${N_current.toFixed(1)}`);
@@ -243,7 +230,7 @@ function shouldDeliver() {
     }
 
     // 3. Trigger: valore decaduto sotto soglia rispetto al picco -> consegna.
-    //    SOLO modalita normale: in modalita stack il fallback e per-pacco (sotto).
+    //    Solo modalita normale (in stack il fallback e per-pacco, sotto).
     if (stackN == null && batchPeak > 0 && value < batchPeak * DECAY_THRESHOLD) {
         N_current = Math.max(N_MIN, N_current - N_REDUCE_STEP);
         console.log(`[OPTIONS] Decay <${(DECAY_THRESHOLD * 100) | 0}% del picco -> consegna, N = ${N_current.toFixed(1)}`);
@@ -252,10 +239,9 @@ function shouldDeliver() {
     }
 
     // 4. SOGLIA DI ACCUMULO.
-    //    Stack: punta SEMPRE a N pacchi (consegna per COUNT). Se non arrivo a N
-    //    continuo a raccogliere (pattuglia del BDI). "Consegna comunque" solo se
-    //    un pacco e sceso >= STACK_DECAY_DROP del suo valore di RACCOLTA (cosi non
-    //    perdo i punti) - oppure se la capacita e piena (trigger 1 sopra).
+    //    Stack: punta a N pacchi (consegna per COUNT); altrimenti continua a
+    //    raccogliere. "Consegna comunque" solo se un pacco e sceso
+    //    >= STACK_DECAY_DROP del valore di raccolta (o capacita piena, trigger 1).
     if (stackN != null) {
         if (count >= stackN) {
             logStackOpt(`porto ${count} >= ${stackN} -> CONSEGNO (stack di ${stackN})`);
@@ -271,9 +257,8 @@ function shouldDeliver() {
         return false;
     }
 
-    // Normale: soglia per VALORE. Se un delivery e nel raggio visivo, consegnare
-    //    costa poco: abbassa la soglia EFFETTIVA (senza toccare N_current, cosi
-    //    l'apprendimento di N resta pulito) e consegna piu spesso.
+    // Normale: soglia per VALORE. Se un delivery e nel raggio visivo abbassa la
+    // soglia EFFETTIVA (senza toccare N_current) e consegna piu spesso.
     const obsDist      = beliefs.config.GAME?.player?.observation_distance ?? 5;
     const delDist      = nearestDeliveryDist(beliefs.me, beliefs.deliveryPoints);
     const nearDelivery = beliefs.deliveryPoints.length > 0 && delDist <= obsDist;
@@ -281,8 +266,8 @@ function shouldDeliver() {
                                       : N_current;
 
     if (value >= effN * avgReward) {
-        // 'opportunistic' = consegna anticipata perche il delivery e a portata:
-        // NON deve influenzare l'adattamento di N (ne su ne giu).
+        // 'opportunistic' = consegna anticipata (delivery a portata): non
+        // influenza l'adattamento di N.
         deliverReason = (nearDelivery && effN < N_current) ? 'opportunistic' : 'threshold';
         console.log(`[OPTIONS] Soglia${nearDelivery ? ` (delivery a dist ${delDist} <= ${obsDist})` : ''}: ` +
                 `${value.toFixed(0)} >= ${(effN * avgReward).toFixed(0)} (effN=${effN.toFixed(1)}) -> consegna`);
@@ -301,8 +286,7 @@ function isCarrying() {
 
 // ─── sezioni di generateOptions ───────────────────────────────────────────────
 
-// Soglia di confidenza sotto cui un pacco non e abbastanza "credibile" da
-// inseguirlo (modello with uncertainty). Slide del prof: e.g. 0.3.
+// Sotto questa confidenza un pacco non e abbastanza credibile da inseguirlo.
 const PICKUP_CONFIDENCE_MIN = 0.3;
 
 function buildPickupOptions(agentPositions, dist) {
@@ -314,8 +298,8 @@ function buildPickupOptions(agentPositions, dist) {
         // Gia portato da qualcuno
         if (parcel.carriedBy) continue;
 
-        // Staffetta: NON ri-raccogliere i pacchi appena ceduti al postino (sono
-        // sulla tile di handover, in attesa che li prenda lui) -> eviterebbe il loop.
+        // Staffetta: non ri-raccogliere i pacchi appena ceduti al postino (sulla
+        // tile di handover) -> eviterebbe il loop.
         if (coord?.role === 'collector' && coord?._relayBusy && coord?._dropTile
             && Math.round(parcel.x) === coord._dropTile.x
             && Math.round(parcel.y) === coord._dropTile.y) continue;

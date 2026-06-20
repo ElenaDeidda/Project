@@ -10,8 +10,8 @@ import {
     notifyRelayDone, clearOverride,
 } from './coordination.js';
 
-// Attende che `cond()` sia vera; ritorna false al timeout, lancia ['stopped'] se
-// l'intenzione viene interrotta. Usato dai piani di coordinamento (attese di team).
+// Attende che `cond()` sia vera; ritorna false al timeout, lancia ['stopped']
+// se l'intenzione viene interrotta.
 async function waitUntil(cond, shouldStop, timeoutMs = 60000, stepMs = 150) {
     const t0 = Date.now();
     while (!cond()) {

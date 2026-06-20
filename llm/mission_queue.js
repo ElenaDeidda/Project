@@ -1,19 +1,9 @@
 // mission_queue.js
 // Coda di missioni con priorita per l'agente LLM.
 //
-// COMPORTAMENTO:
-//   1. Quando arriva una missione -> la valuta (mission_evaluator) e la mette
-//      in coda. Le trappole vengono scartate subito.
-//   2. Dopo un breve BUFFER (per raccogliere missioni che arrivano in burst)
-//      la coda viene scandita: la missione di priorita maggiore viene eseguita.
-//   3. Mentre eseguo una missione X, se ne arriva una Y con priorita
-//      >= X.priority × INTERRUPT_FACTOR, X viene interrotta e parte Y.
-//      Altrimenti Y resta in coda e verra ripresa dopo.
-//   4. Niente expiry: le missioni restano in coda finche non vengono eseguite
-//      o scartate per invalidita.
-//   5. Prima di eseguire una missione, controllo "isStillValid": se e una
-//      missione di pickup su coordinate dove non c'e piu un pacco
-//      (probabilmente l'ha preso un altro agente) -> scartata.
+// Flusso: valuta + accoda -> dopo un BUFFER esegue la priorita maggiore -> una
+// missione molto piu conveniente (>= INTERRUPT_FACTOR×) interrompe la corrente.
+// Niente expiry; prima di eseguire, isStillValid scarta i pickup senza pacco.
 
 import { evaluateMission } from './mission_evaluator.js';
 
@@ -25,9 +15,7 @@ const TICK_MS          = 100;   // frequenza dello scheduler
 const PICKUP_KEYWORDS = /\b(pick\s*up|pickup|take|grab|collect|fetch|retrieve)\b/i;
 
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Stato del modulo
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Stato del modulo ────────────────────────────────────────────────────────
 
 let _queue   = [];          // {text, senderId, priority, addedAt, verdict}
 let _running = null;        // {text, senderId, priority, controller}
@@ -72,10 +60,9 @@ export function enqueue(text, senderId) {
         return;
     }
 
-    // "Damping" in base al carico: se sto gia trasportando pacchi che valgono
-    // piu della mission, abbasso la sua priorita (meglio consegnare prima). MA
-    // SOLO per mission positive normali - MAI per regole/penalita urgenti (vanno
-    // installate subito) e mai sotto zero.
+    // Damping per carico: se i pacchi trasportati valgono piu della mission,
+    // abbasso la priorita (meglio consegnare prima). Solo per mission normali
+    // positive, mai per le urgenti.
     let priority = verdict.priority;
     let reasonExtra = '';
     if (!verdict.urgent && verdict.reward != null && verdict.reward > 0

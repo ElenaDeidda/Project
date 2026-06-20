@@ -6,22 +6,16 @@
 import { snapshotWorld } from './world_state.js';
 
 /**
- * Contesto runtime condiviso, creato in startLlmAgent e propagato per
- * riferimento a runMission / executeStep / tools. NON va promosso a singleton
- * di modulo: e il contratto implicito tra tools, executor e runner.
+ * Contesto runtime condiviso, propagato per riferimento a runMission / executeStep / tools.
  * @typedef {Object} AgentCtx
  * @property {Object} socket              socket Deliveroo (DjsConnect)
  * @property {Object} beliefs             beliefs condivisi col BDI
  * @property {Object} deps                piani/dipendenze (navigateTo, activeRules, bdiPause/Resume)
- * @property {string|null} lastSender     id del mittente dell'ultima missione (per `answer`)
+ * @property {string|null} lastSender     mittente dell'ultima missione (per `answer`)
  * @property {string|null} [_lastCalcResult] ultimo risultato di calculate (per `answer: result`)
  */
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TOOLS REGISTRY
-//    Ogni tool e una funzione async (args, ctx) -> string (observation).
-//    ctx contiene { socket, beliefs, deps } passati a startLlmAgent.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── TOOLS REGISTRY: ogni tool e (args) -> string (observation) ──────────────
 
 function makeTools(ctx) {
     const { socket, beliefs, deps } = ctx;
@@ -39,15 +33,10 @@ function makeTools(ctx) {
             }
         },
 
-        // ── Tool GENERALE di percezione ─────────────────────────────────────
-        // Espone TUTTO quello che il BDI sa nei `beliefs`. L'LLM lo legge e
-        // si arrangia: niente tool specifici per ogni tipo di missione.
-        // Restituisce uno snapshot testuale compatto ma completo.
+        // ── Percezione: snapshot testuale di tutto cio che il BDI sa ────────
         inspect: () => snapshotWorld(beliefs, deps?.activeRules ?? {}),
 
-        // ── Quick-win: la delivery piu vicina a me ──────────────────────────
-        // Evita all'LLM il calcolo ripetuto delle distanze. Utile per
-        // missioni tipo "vai alla delivery piu vicina".
+        // ── Delivery piu vicina a me ────────────────────────────────────────
         nearest_delivery: () => {
             const dps = beliefs.deliveryPoints ?? [];
             if (dps.length === 0) return 'Nessuna delivery tile nota';
@@ -68,11 +57,8 @@ function makeTools(ctx) {
             const res = await deps.navigateTo(
                 beliefs.me, target, socket, beliefs.mapTiles, () => false
             );
-            // VERIFICA REALE: non fidarti del solo codice di ritorno. navigateTo
-            // puo restituire 'stopped' (interrotto) o arrivare solo in parte;
-            // confrontiamo la posizione EFFETTIVA col target cosi non dichiariamo
-            // un arrivo che non e avvenuto. Se non siamo arrivati -> Error, che
-            // fa scattare la reflection invece di un falso "completato".
+            // Verifica la posizione effettiva: navigateTo puo fermarsi a meta.
+            // Se non siamo arrivati -> Error (fa scattare la reflection).
             const here = { x: Math.round(beliefs.me.x), y: Math.round(beliefs.me.y) };
             if (here.x !== target.x || here.y !== target.y) {
                 return `Error: non arrivato a (${target.x},${target.y}) - ora a (${here.x},${here.y}) [navigateTo=${res}]`;
@@ -90,10 +76,7 @@ function makeTools(ctx) {
             return r && r.length ? `Consegnati ${r.length} pacchi` : 'Niente da consegnare';
         },
 
-        // ── L1: rispondi al mittente della missione ─────────────────────────
-        // Le missioni-domanda ("capital of Italy?", "calcola 5*5") richiedono
-        // di mandare la risposta all'agente che ha inviato il prompt.
-        // ctx.lastSender e popolato in startLlmAgent al momento di onMsg.
+        // ── L1: rispondi al mittente della missione (ctx.lastSender) ────────
         answer: (input) => {
             const to = ctx.lastSender;
             if (!to) return 'Error: nessun mittente noto a cui rispondere';
@@ -101,22 +84,8 @@ function makeTools(ctx) {
             return `Risposta inviata a ${to}: ${input}`;
         },
 
-        // ── L2: installa una regola persistente sul gioco ───────────────────
-        // Le missioni di livello 2 sono REGOLE che modificano il comportamento
-        // di base (es. "consegna in stack di 3"). L'LLM le riconosce e le
-        // installa qui. Le regole vengono applicate dal loop BDI in llm_main.js.
-        //
-        // Input: JSON con {type, ...params}. Tipi supportati:
-        //   {"type":"stack_size", "n":3}
-        //     -> consegna solo quando porti esattamente 3 pacchi
-        //   {"type":"forbidden_tile", "x":5, "y":7}
-        //     -> A* evita la tile (puo essere chiamato piu volte per piu tile)
-        //   {"type":"zero_delivery", "x":5, "y":7}
-        //     -> mai consegnare su questa delivery (ne sceglie un'altra)
-        //   {"type":"bonus_delivery", "x":5, "y":7}
-        //     -> preferisci questa delivery quando possibile
-        //   {"type":"max_parcel_reward", "value":10}
-        //     -> non raccogliere pacchi con reward > 10
+        // ── L2: installa una regola persistente (applicata dal loop BDI) ────
+        // Input: JSON {type, ...params}; i tipi sono nello switch sotto.
         set_rule: (input) => {
             if (!deps?.activeRules) return 'Error: activeRules non disponibile';
             let r;

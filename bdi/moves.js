@@ -105,7 +105,7 @@ function aStarPath(start, goal, walkableTiles, blocked, isDirectional = false) {
             const tile = walkableTiles.get(nKey);
             if (!tile) continue;
             if (tile.type === 0 || tile.type === '0') continue;
-            if (tile.type === '5!') continue; // FIX: cassa presente = muro per A*, non superabile/spostabile
+            if (tile.type === '5!') continue; // cassa = muro per A*
 
             // Vincolo direzionale: attivo solo su mappe direzionali
             // e solo se la tile corrente è una freccia
@@ -132,10 +132,9 @@ function aStarPath(start, goal, walkableTiles, blocked, isDirectional = false) {
     return null;
 }
 
-// BFS single-source: distanza reale di percorso dalla posizione `start` verso
-// TUTTE le celle raggiungibili, rispettando muri, vincoli direzionali e celle
-// bloccate dagli agenti. Una sola passata O(celle).
-// Ritorna una Map "x_y" → distanza; le celle assenti sono irraggiungibili (∞).
+// BFS single-source: distanza reale di percorso da `start` a tutte le celle
+// raggiungibili (rispetta muri, vincoli direzionali, celle bloccate). Ritorna
+// Map "x_y" → distanza; celle assenti = irraggiungibili (∞).
 export function reachableDistances(start, walkableTiles, blocked, isDirectional = false) {
     const key  = (x, y) => `${Math.round(x)}_${Math.round(y)}`;
     const dist = new Map();
@@ -167,8 +166,7 @@ export function reachableDistances(start, walkableTiles, blocked, isDirectional 
             if (!tile) continue;
             if (tile.type === 0 || tile.type === '0') continue;
 
-            // Vincolo direzionale: se la tile corrente è una freccia, blocca
-            // i movimenti vietati (stessa logica dell'A*)
+            // Vincolo direzionale (stessa logica dell'A*)
             if (isDirectional && ARROW_TYPES.has(currentTile?.type)) {
                 if (ARROW_BLOCKED[currentTile.type](current, nb)) continue;
             }
@@ -190,10 +188,9 @@ export function reachableDistances(start, walkableTiles, blocked, isDirectional 
 async function opportunisticActions(me, socket) {
     const x = Math.round(me.x), y = Math.round(me.y);
 
-    // Pickup: c'è un pacco libero proprio qui sotto?
-    // Cap stack_size=N: se porto già N pacchi NON ne raccolgo un (N+1)-esimo
-    // mentre vado a consegnare — altrimenti consegno i N più ricchi e me ne
-    // "resta 1" in mano. (Con max_deliver_reward invece accumulo fino a capacity.)
+    // Pickup: c'è un pacco libero qui sotto?
+    // Cap stack_size=N: se porto già N pacchi non raccolgo l'(N+1)-esimo mentre
+    // vado a consegnare. (Con max_deliver_reward accumulo fino a capacity.)
     const Ncap = beliefs.activeRules?.stackSize;
     const stackCapReached = Number.isInteger(Ncap)
         && typeof beliefs.activeRules?.maxDeliverReward !== 'number'
@@ -225,9 +222,8 @@ async function opportunisticActions(me, socket) {
         if (beliefs.coord?.role === 'collector') return;
         const onDelivery = beliefs.deliveryPoints.some(d => d.x === x && d.y === y);
         if (onDelivery) {
-            // stack_size puro: NON consegno un parziale mentre passo (aspetto di
-            // avere N). Con max_deliver_reward invece i pacchi ≤ soglia sono
-            // "pronti" → li consegno appena passo (non li tengo a decadere).
+            // stack_size puro: non consegno un parziale mentre passo (aspetto N).
+            // Con max_deliver_reward i pacchi ≤ soglia sono pronti → li consegno.
             const N = beliefs.activeRules?.stackSize;
             const hasMaxDeliver = typeof beliefs.activeRules?.maxDeliverReward === 'number';
             if (Number.isInteger(N) && !hasMaxDeliver && beliefs.carriedParcels.length < N) return;

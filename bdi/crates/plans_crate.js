@@ -1,20 +1,6 @@
 // plans_crate.js — Piani per mappe CON CASSE (isCrateMap === true).
-//
-// Questi piani vengono messi in testa alla planLibrary di plans.js,
-// così hanno priorità su GoPickUp/Deliver/GoToSpawn normali.
-// isApplicableTo controlla sempre `beliefs.isCrateMap` come guardia.
-//
-// Navigazione delegata a execCratePlan (pddl_creates.js) che:
-//   1. tenta A* diretto (le casse sono muri per A*)
-//   2. se bloccato, chiama il solver PDDL per liberare il percorso dalle casse
-//   3. esegue i push con emitMove diretto
-//   4. usa A* per le mosse pure (move consecutivi)
-//   5. se A* fallisce → ricalcola con il solver PDDL
-//
-// Marcatura "target irraggiungibile" e halt totale NON sono gestiti qui:
-// restano unica responsabilità rispettivamente di pddl_crates.js::callSolver
-// (unico punto che scrive in beliefs.unreachableCrateTargets) e di
-// options.js::checkGlobalDeadlock (unico punto che decide haltAgent).
+// Messi in testa alla planLibrary di plans.js; isApplicableTo controlla
+// `beliefs.isCrateMap`. Navigazione delegata a execCratePlan (pddl_creates.js).
 
 import { beliefs }       from '../beliefs.js';
 import { execCratePlan } from './pddl_crates.js';

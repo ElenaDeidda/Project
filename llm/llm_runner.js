@@ -1,7 +1,6 @@
 // llm_runner.js
-// Orchestrazione di una missione: Planning -> Execution -> (Reflection) ->
-// Completion, con i safety net deterministici e la delega dei task cooperativi
-// di livello 3 a coordination.js. Espone anche il filtro dei messaggi protocollo.
+// Orchestrazione missione: Planning -> Execution -> (Reflection) -> Completion,
+// con safety net deterministici e delega dei task cooperativi L3 a coordination.js.
 
 import { extractReward, extractMultiplier } from './mission_evaluator.js';
 import {
@@ -13,8 +12,7 @@ import { buildStatefulUserMessage } from './llm_messages.js';
 import { understandMission, compileIntent, generatePlan, reflectOnError } from './llm_planner.js';
 import { executeStep } from './llm_executor.js';
 
-// Quante volte al massimo proviamo a correggere il piano prima di arrenderci.
-// Meglio fallire rapidamente che restare appesi a riflettere all'infinito.
+// Max tentativi di correzione del piano prima di arrendersi.
 const MAX_REFLECTIONS = 3;
 
 
@@ -111,11 +109,7 @@ async function runMission(missionText, ctx, signal = null) {
             // coda) esegue l'override / il freeze via beliefs.coord.
             return handleCoordinate(intent);
         }
-        // SAFETY NET deterministico: un'azione ATOMICA con reward NEGATIVO e una
-        // trappola auto-lesiva (penalita per AVERLA fatta) -> non eseguirla, anche
-        // se l'LLM l'ha classificata "atomic". Le penalita-OBBLIGO sono regole
-        // (family 'rule') o reattive, gestite sopra: questo colpisce solo le
-        // azioni una-tantum che fanno solo perdere punti.
+        // SAFETY NET: azione atomica con reward negativo = trappola auto-lesiva -> skip.
         if (intent.family === 'atomic') {
             const r = extractReward(missionText);
             if (r != null && r < 0) {
@@ -123,9 +117,7 @@ async function runMission(missionText, ctx, signal = null) {
                 return `Ignorata: trappola auto-lesiva (reward ${r})`;
             }
         }
-        // SAFETY NET: una REGOLA con moltiplicatore < 1 e DANNOSA (seguirla
-        // ridurrebbe il reward, es. "stacks of 3 to get 0.3 times the reward").
-        // Non la installiamo. I moltiplicatori >= 1 (double/triple/2x) restano.
+        // SAFETY NET: regola con moltiplicatore < 1 e dannosa -> non installarla.
         if (intent.family === 'rule') {
             const mult = extractMultiplier(missionText);
             if (mult != null && mult < 1) {

@@ -1,16 +1,11 @@
 // world_state.js
-// Read-helper PURI sui `beliefs` (nessuna chiamata LLM, nessun ctx). Espongono
-// lo stato del mondo all'LLM (snapshotWorld) e calcolano query deterministiche
-// usate da tool, executor e planner. Modulo di basso livello.
+// Read-helper puri sui `beliefs`: snapshot del mondo per l'LLM (snapshotWorld)
+// e query deterministiche usate da tool, executor e planner.
 
 import { parseIntervalMs } from '../bdi/basic_functions.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SNAPSHOT DEL MONDO - usato dal tool `inspect`
-// Espone tutti i beliefs in forma testuale compatta. Quello che conosce il
-// BDI lo conosce anche l'LLM. Se aggiungi un campo ai beliefs e lo vuoi
-// visibile all'LLM, aggiungilo qui.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── SNAPSHOT DEL MONDO (tool `inspect`): beliefs in forma testuale compatta ──
+// Per esporre un nuovo campo all'LLM, aggiungilo qui.
 
 function snapshotWorld(beliefs, activeRules = {}) {
     const me = beliefs.me ?? {};
@@ -49,9 +44,7 @@ function snapshotWorld(beliefs, activeRules = {}) {
         dps.length ? dps.map(d => `(${d.x},${d.y})`).join(' ') : 'none'
     }`);
 
-    // Spawn-rich tiles: dove i pacchi possono apparire. NON sono delivery!
-    // Espone i top-N per visibilita (= quante spawn tiles si vedono da li):
-    // sono i posti migliori dove andare/aspettare per trovare pacchi.
+    // Spawn tile (dove appaiono i pacchi, NON delivery): top-N per visibilita.
     const spawnVis = beliefs.spawnVisibility ?? new Map();
     if (spawnVis.size > 0) {
         const top = [...spawnVis.entries()]
@@ -76,8 +69,7 @@ function snapshotWorld(beliefs, activeRules = {}) {
         }
     }
 
-    // Agenti visibili (nemici / altri). Saltiamo i "phantom" usati internamente
-    // per implementare forbidden_tile (chiave che inizia con __forbidden_).
+    // Agenti visibili. Saltiamo i phantom di forbidden_tile (chiave __forbidden_).
     const agentEntries = [...(beliefs.agents?.entries() ?? [])]
         .filter(([k]) => !String(k).startsWith('__forbidden_'));
     if (agentEntries.length === 0) {
@@ -89,7 +81,7 @@ function snapshotWorld(beliefs, activeRules = {}) {
         }
     }
 
-    // Regole L2 attive (cosi l'LLM sa cosa ha gia installato)
+    // Regole L2 attive
     const ruleKeys = Object.keys(activeRules);
     if (ruleKeys.length > 0) {
         lines.push(`active_rules: ${JSON.stringify(activeRules)}`);
@@ -126,12 +118,10 @@ function nearestDelivery(beliefs) {
 
 
 // ── ACQUIRE PERSISTENTE: parametri (allineati al patrol del BDI in options.js) ─
-const ACQUIRE_WAIT_FACTOR   = 2;        // attesa per spawn tile = factor × intervallo di generazione
-const ACQUIRE_WAIT_FALLBACK = 4000;     // ms, se l'intervallo di generazione non e leggibile
-const ACQUIRE_POLL_MS       = 250;      // ogni quanto ri-controllo beliefs.parcels mentre attendo
-// Tetto massimo complessivo della ricerca. 0 = nessun tetto: cerca finche non
-// trova un pacco o finche la coda interrompe la missione (default voluto dalla
-// missione "portala a termine a prescindere"). Override con ACQUIRE_MAX_MS.
+const ACQUIRE_WAIT_FACTOR   = 2;        // attesa spawn tile = factor × intervallo generazione
+const ACQUIRE_WAIT_FALLBACK = 4000;     // ms, se l'intervallo non e leggibile
+const ACQUIRE_POLL_MS       = 250;      // poll di beliefs.parcels durante l'attesa
+// Tetto massimo della ricerca. 0 = nessun tetto (cerca finche trova o la coda interrompe).
 const ACQUIRE_MAX_MS        = Number(process.env.ACQUIRE_MAX_MS) || 0;
 
 // Distanza di osservazione corrente (default 5 come da SDK).
@@ -139,9 +129,8 @@ function obsDistOf(beliefs) {
     return beliefs.config?.GAME?.player?.observation_distance ?? 5;
 }
 
-// Pacco libero ATTUALMENTE VISIBILE (entro obs_distance) piu vicino a me.
-// Ignora i pacchi solo "ricordati" fuori vista (fantasmi): inseguirli porta
-// a "Nessun pacco qui".
+// Pacco libero visibile (entro obs_distance) piu vicino a me; ignora i fantasmi
+// fuori vista (inseguirli porta a "Nessun pacco qui").
 function nearestVisibleParcel(beliefs) {
     const me  = beliefs.me ?? { x: 0, y: 0 };
     const obs = obsDistOf(beliefs);
@@ -155,8 +144,7 @@ function nearestVisibleParcel(beliefs) {
     return visible[0];
 }
 
-// Spawn tile "migliore": alta visibilita, vicina a me. Dove ANDARE a cercare
-// pacchi quando non se ne vede nessuno (invece di inseguire fantasmi).
+// Spawn tile migliore (alta visibilita, vicina): dove andare a cercare pacchi.
 function bestSpawnTile(beliefs) {
     const spawnVis = beliefs.spawnVisibility ?? new Map();
     if (spawnVis.size === 0) return null;
@@ -170,8 +158,7 @@ function bestSpawnTile(beliefs) {
     return best;
 }
 
-// Tutte le spawn tile ordinate best-first (stesso score di bestSpawnTile). Serve
-// per RUOTARE tra le tile invece di martellare sempre la stessa quando e vuota.
+// Spawn tile ordinate best-first (score di bestSpawnTile); per ruotare tra le tile.
 function rankedSpawnTiles(beliefs) {
     const spawnVis = beliefs.spawnVisibility ?? new Map();
     const me = beliefs.me ?? { x: 0, y: 0 };
@@ -185,9 +172,8 @@ function rankedSpawnTiles(beliefs) {
     return tiles;
 }
 
-// Finestra d'attesa su una spawn tile prima di ruotare: 2× l'intervallo di
-// generazione pacchi (come patrolTimeout() del BDI), altrimenti il fallback.
-// parseIntervalMs ritorna Infinity per 'infinite'/non leggibile -> fallback.
+// Attesa su una spawn tile prima di ruotare: 2× l'intervallo di generazione
+// (parseIntervalMs ritorna Infinity per 'infinite'/non leggibile -> fallback).
 function acquireWaitMs(beliefs) {
     const p  = beliefs.config?.GAME?.parcels;
     const ms = parseIntervalMs(p?.generation_event ?? p?.generation_time);

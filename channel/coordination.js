@@ -1,16 +1,12 @@
 // coordination.js - Task cooperativi di livello 3 (comunicazione BDI ↔ LLM).
-// Caricato da ENTRAMBI i processi (main.js e llm_main.js). Si appoggia a
-// communication.js per i messaggi di team e pilota i loop BDI tramite
-// `beliefs.coord` ({ frozen, override, role }).
+// Caricato da entrambi i processi (main.js e llm_main.js); pilota i loop BDI
+// tramite `beliefs.coord` ({ frozen, override, role }).
 //
 // Tre task:
-//   1) RENDEZVOUS  - entrambi entro distanza <= maxDist da (x,y) e si aspettano.
-//   2) STAFFETTA   - un pacco preso da un agente e consegnato dall'altro (+bonus).
-//                    Ruoli: BDI = raccoglitore, LLM = postino. "Incontro poi mollo":
-//                    il raccoglitore va alla tile di handover e ASPETTA il postino,
-//                    poi lascia i pacchi; il postino li recupera e consegna.
-//   3) RED LIGHT   - tutti su una riga DISPARI, poi freeze finche non arriva il
-//                    messaggio "green" (relay dell'LLM) -> ripartono; "red" -> fermi.
+//   1) RENDEZVOUS - entrambi entro maxDist da (x,y) e si aspettano.
+//   2) STAFFETTA  - raccoglitore (BDI) lascia i pacchi alla tile di handover,
+//                   postino (LLM) li recupera e consegna.
+//   3) RED LIGHT  - tutti su una riga dispari, poi freeze fino a "green".
 
 import { beliefs, getBlockedCells, deliverableIds } from '../bdi/beliefs.js';
 import { initComms, broadcast, sendTo, onTeamMessage, getTeammates } from './communication.js';
@@ -23,21 +19,21 @@ function log(msg) { console.log(`[COORD:${beliefs?.me?.name || '?'}] ${msg}`); }
 
 function defaultCoord() {
     return {
-        frozen:   false,    // red light: il loop BDI resta fermo
+        frozen:   false,    // red light: loop BDI fermo
         override: null,     // predicate forzata (es. ['go_near_and_wait', x, y, d])
         role:     null,     // 'collector' | 'postman' (staffetta)
 
         // ── stato interno dei task ──────────────────────────────────────────
         _rzv:        null,  // { x, y, maxDist } rendezvous attivo
         _arrived:    new Set(),
-        _redlight:   false, // task red-light attivo (per intercettare green/red)
-        _postman:    null,  // id del postino (lato collector)
-        _collector:  null,  // id del raccoglitore (lato postman)
-        _handover:   null,  // { tile:{x,y}, ids:[...] } handover in corso (postman)
-        _postmanReady: false, // il postino e arrivato alla tile di handover (collector)
-        _dropped:    false, // il collector ha lasciato i pacchi (postman)
-        _relayBusy:  false, // collector: handover in corso, NON avviarne un altro
-        _dropTile:   null,  // collector: tile dove ho ceduto i pacchi (non ri-raccoglierli)
+        _redlight:   false, // red-light attivo
+        _postman:    null,  // id postino (lato collector)
+        _collector:  null,  // id raccoglitore (lato postman)
+        _handover:   null,  // { tile:{x,y}, ids:[...] } (postman)
+        _postmanReady: false, // postino arrivato alla tile (collector)
+        _dropped:    false, // collector ha lasciato i pacchi (postman)
+        _relayBusy:  false, // collector: handover in corso
+        _dropTile:   null,  // collector: tile dove ho ceduto i pacchi
     };
 }
 
@@ -68,8 +64,7 @@ export function initCoordination(socket) {
     });
     onTeamMessage('coord_handover', (p, from) => {       // lato POSTINO
         const c = beliefs.coord;
-        // Un fetch e gia in corso -> ignoro (la staffetta e serializzata: il
-        // raccoglitore non dovrebbe mandarne un altro finche non consegno).
+        // Fetch gia in corso -> ignoro (staffetta serializzata).
         if (c.override?.[0] === 'relay_fetch') {
             log(`staffetta: handover (${p.tile.x},${p.tile.y}) ignorato - sto gia recuperando`);
             return;

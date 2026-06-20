@@ -10,8 +10,8 @@ import {
 import { makeTools } from './llm_tools.js';
 import { normalizeAction, isResultPlaceholder, parseCoords } from './llm_parsers.js';
 
-// Navigazione interrompibile (shouldStop legato al signal di abort). Ritorna
-// true SOLO se e davvero arrivato a (x,y) (riusa l'idea di verifica del tool).
+// Navigazione interrompibile (stop legato al signal di abort). True solo se e
+// davvero arrivato a (x,y).
 async function navigateInterruptible(ctx, x, y, signal) {
     const { socket, beliefs, deps } = ctx;
     const res = await deps.navigateTo(
@@ -36,10 +36,9 @@ function abortableSleep(ms, signal) {
 }
 
 /**
- * ACQUIRE PERSISTENTE (deterministico, NO LLM): assicura di avere un pacco a
- * bordo. Cicla {prendi il visibile piu vicino; se non c'e, vai sulla prossima
- * spawn tile e ASPETTA che ne compaia uno, ruotando le tile} finche non porta
- * un pacco. Esce solo su successo o su abort (o sul tetto ACQUIRE_MAX_MS se >0).
+ * Acquire persistente: assicura un pacco a bordo ciclando tra "prendi il visibile
+ * piu vicino" e "vai sulla prossima spawn tile e aspetta uno spawn". Esce solo su
+ * successo, abort, o tetto ACQUIRE_MAX_MS (se >0).
  * @returns {Promise<{success:boolean, outcome?:string, error?:string}>}
  */
 async function acquireParcelPersistent(ctx, signal) {
@@ -96,7 +95,7 @@ async function acquireParcelPersistent(ctx, signal) {
         if (carrying()) { console.log(`${tag} preso in transito OK`); return { success: true, outcome: 'acquisito in transito' }; }
         if (aborted())  return { success: false, error: 'acquire interrotto (abort)' };
         if (!arrived) {
-            // tile irraggiungibile ora: piccolo backoff per non ciclare a vuoto.
+            // tile irraggiungibile: backoff per non ciclare a vuoto.
             console.log(`${tag} spawn tile (${next.x},${next.y}) irraggiungibile - provo la prossima`);
             if (await abortableSleep(ACQUIRE_POLL_MS, signal) === 'aborted')
                 return { success: false, error: 'acquire interrotto (abort)' };
@@ -122,10 +121,8 @@ async function acquireParcelPersistent(ctx, signal) {
 // ── FASE 2: EXECUTION DI UN SINGOLO STEP (nessuna chiamata LLM) ───────────────
 
 /**
- * Esegue un singolo step del piano traducendolo in una (o piu) tool call.
- * Non chiama l'LLM.
+ * Esegue un singolo step del piano traducendolo in tool call (nessun LLM).
  * @param {object} step - {action, target}
- * @param {object} ctx
  * @returns {Promise<{success: boolean, outcome?: string, error?: string}>}
  */
 async function executeStep(step, ctx, signal = null) {
@@ -188,13 +185,10 @@ async function executeStep(step, ctx, signal = null) {
             case 'pick': {
                 const c = parseCoords(target);        // coordinate esplicite dal testo?
                 if (!c) {
-                    // Target simbolico ("nearest"/vuoto/acquire): ricerca PERSISTENTE
-                    // (ruota spawn tile + aspetta gli spawn) finche non porta un pacco
-                    // o finche la missione viene interrotta. Niente piu resa al primo
-                    // controllo a vuoto.
+                    // Target simbolico ("nearest"/vuoto): ricerca persistente.
                     return await acquireParcelPersistent(ctx, signal);
                 }
-                // Coordinate esplicite: pacco SPECIFICO -> prova-e-fallisci.
+                // Coordinate esplicite: pacco specifico -> prova-e-fallisci.
                 const nav = await tools.navigate_to(`${c.x},${c.y}`);
                 if (isErr(nav)) return fail(nav);
                 const pick = await tools.pickup();
@@ -213,11 +207,8 @@ async function executeStep(step, ctx, signal = null) {
                 const carriedBefore = beliefs.carriedParcels?.length ?? 0;
                 const nav = await tools.navigate_to(`${c.x},${c.y}`);
                 if (isErr(nav)) return fail(nav);
-                // Durante il tragitto (e soprattutto arrivando sulla delivery tile)
-                // `opportunisticActions` consegna automaticamente i pacchi. Quindi
-                // se portavo qualcosa e ora non porto piu, LA CONSEGNA E AVVENUTA:
-                // e un SUCCESSO, non "Niente da consegnare". (Era questo il bug del
-                // "lo fa ma pensa di non averlo fatto".)
+                // opportunisticActions puo gia consegnare arrivando sulla delivery:
+                // se portavo qualcosa e ora no, la consegna e avvenuta -> successo.
                 const carriedNow = beliefs.carriedParcels?.length ?? 0;
                 if (carriedBefore > 0 && carriedNow === 0) {
                     console.log(`[LLM-EXEC] consegna gia avvenuta arrivando a (${c.x},${c.y}): ${carriedBefore} pacchi`);
@@ -225,15 +216,14 @@ async function executeStep(step, ctx, signal = null) {
                 }
                 const drop = await tools.putdown();
                 if (/Niente da consegnare/i.test(drop)) {
-                    // Non portavo nulla all'inizio e niente da consegnare -> vero fallimento.
+                    // Non portavo nulla -> vero fallimento.
                     return fail(`${nav}; ma ${drop}`);
                 }
                 return ok(`${nav}; ${drop}`);
             }
 
             default: {
-                // Fallback: il modello potrebbe aver usato direttamente il nome
-                // di un tool (es. "calculate", "nearest_delivery", "list_rules").
+                // Fallback: l'azione potrebbe essere direttamente il nome di un tool.
                 if (typeof tools[action] === 'function') {
                     const out = await tools[action](target);
                     return isErr(out) ? fail(out) : ok(out);

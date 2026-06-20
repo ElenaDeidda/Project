@@ -1,8 +1,8 @@
 // beliefs.js — Stato del mondo e funzioni di aggiornamento
 import { smartDist, parseIntervalMs } from './basic_functions.js';
 
-// ─── Modello di credenze "with uncertainty" (slide del prof) ──────────────────
-// Ogni pacco fuori vista porta una confidenza P(esiste ancora) che DECADE nel
+// ─── Credenze "with uncertainty" ─────────────────────────────────────────────
+// Ogni pacco fuori vista ha una confidenza P(esiste ancora) che decade nel
 // tempo e viene rivista in stile bayesiano. Costanti tarabili:
 const CONF_LAMBDA        = Math.LN2 / 10000;  // half-life 10s di P(esiste) fuori vista
 const SENSOR_RELIABILITY = 0.9;               // P(vedo il pacco | è nel raggio ed esiste)
@@ -28,19 +28,16 @@ export const beliefs = {
     // per ogni spawn tile "x_y" → quante spawn tiles sono visibili da quel punto
     spawnVisibility: new Map(),
 
-    // Stato di coordinamento di team (livello 3). Inizializzato da
-    // coordination.js → initCoordination(). null = nessun coordinamento attivo.
-    //   frozen:   true → il loop BDI non si muove (red light)
-    //   override: predicate forzata da eseguire al posto della deliberazione
-    //   role:     'collector' | 'postman' | null (staffetta, task 2)
+    // Coordinamento di team (null = nessuno). frozen → loop BDI fermo;
+    // override → predicate forzata; role → 'collector'|'postman'|null.
     coord: null,
 
-    // "x_y" → target per cui il solver PDDL ha confermato che non esiste
-    // nessun piano (mappa con casse) — esclusi in modo permanente dalle opzioni.
+    // Target esclusi in modo permanente: il solver PDDL ha confermato che non
+    // esiste un piano (mappa con casse).
     unreachableCrateTargets: new Set(),
 
-    // true quando per NESSUN target esiste un piano possibile: l'agente
-    // smette di deliberare (vedi haltAgent()).
+    // true quando nessun target ha un piano possibile → l'agente smette di
+    // deliberare (vedi haltAgent()).
     halted: false,
 };
 
@@ -48,8 +45,8 @@ export function updateConfig(config) {
     beliefs.config = config;
 }
 
-// Ferma definitivamente la deliberazione dell'agente: nessun target è
-// raggiungibile su questa mappa con la configurazione attuale delle casse.
+// Ferma definitivamente la deliberazione: nessun target raggiungibile con
+// l'attuale configurazione delle casse.
 export function haltAgent(reason) {
     if (beliefs.halted) return;
     beliefs.halted = true;
@@ -57,10 +54,9 @@ export function haltAgent(reason) {
 }
 
 export function updateMap(width, height, tiles) {
-    // Reset: onMap arriva con la mappa COMPLETA (anche a ogni restart partita).
-    // Senza azzerare, mapTiles/deliveryPoints/spawnVisibility si ACCUMULEREBBERO
-    // tra una partita e l'altra (es. delivery_points duplicati) → pathfinding
-    // confuso. Ricostruiamo da zero ogni volta.
+    // Reset: onMap arriva con la mappa COMPLETA anche ad ogni restart. Senza
+    // azzerare, mapTiles/deliveryPoints/spawnVisibility si accumulerebbero tra
+    // partite → ricostruiamo da zero.
     beliefs.mapTiles.clear();
     beliefs.deliveryPoints.length = 0;
     beliefs.spawnVisibility.clear();
@@ -107,10 +103,9 @@ export function updateMap(width, height, tiles) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Stampa "umana" della mappa con le COORDINATE, per capire il sistema di numeri.
-// Convenzione del server: origine (0,0) in BASSO a SINISTRA, x cresce verso
-// destra, y cresce verso l'alto → disegniamo le righe da ymax (in alto) a ymin.
-// Funzione PURA: ritorna una stringa multilinea (l'I/O lo fa il chiamante).
+// Stampa "umana" della mappa con le coordinate. Funzione PURA: ritorna una
+// stringa multilinea. Convenzione server: origine (0,0) in basso a sinistra,
+// y cresce verso l'alto → righe disegnate da ymax a ymin.
 // ─────────────────────────────────────────────────────────────────────────────
 export function formatMap(beliefs) {
     const tiles = beliefs.mapTiles;
@@ -213,26 +208,24 @@ export function updateSensing(sensing) {
     }
 
     // Aggiorna gli agenti PRIMA della riconciliazione pacchi, così la confidenza
-    // può tener conto dei nemici vicini (last-known position).
+    // può tener conto dei nemici vicini.
     updateAgents(sensing.agents ?? []);
 
     // --- 2. Riconcilia i pacchi NON visti in questo tick (memoria) ---
-    // Senza questo passo un pacco che esce dalla vista sparirebbe subito,
-    // facendo perdere il commitment all'agente → oscillazione tra due target.
-    // Modello "with uncertainty": invece di cancellare di colpo, manteniamo una
-    // confidenza P(esiste) che decade nel tempo e viene rivista in stile bayesiano.
+    // Invece di cancellarli subito (causerebbe oscillazione tra target),
+    // manteniamo una confidenza P(esiste) che decade e viene rivista (bayes).
     for (const [id, p] of beliefs.parcels) {
         if (seen.has(id)) continue;
 
-        // Reward ATTESO: continua a scontare il decay di gioco (= valore SE esiste).
+        // Reward atteso: continua a scontare il decay di gioco (valore SE esiste).
         if (Number.isFinite(decayMs)) {
             p.reward   -= (now - p.lastDecay) / decayMs;
             p.lastDecay = now;
             if (p.reward <= 0) { beliefs.parcels.delete(id); continue; }
         }
 
-        // 1) Decadimento temporale di P(esiste). Più veloce se un nemico è vicino
-        //    al pacco (può averlo già raccolto). "Visto tanto tempo fa → P bassa".
+        // 1) Decadimento temporale di P(esiste). Più veloce se un nemico è
+        //    vicino al pacco (può averlo già raccolto).
         const cStart = p.confidence ?? 1;
         const dt = now - (p.lastConfUpdate ?? now);
         p.lastConfUpdate = now;
@@ -244,9 +237,8 @@ export function updateSensing(sensing) {
         let c = cStart * Math.exp(-lambda * dt);
         const cAfterTime = c;
 
-        // 2) Dentro il raggio di osservazione ma NON lo vedo → forte evidenza che
-        //    non c'è più: revisione bayesiana  P(E|¬Seen)=P(¬Seen|E)·P(E)/P(¬Seen),
-        //    con P(¬Seen|E)=1−affidabilità sensore e P(¬Seen|¬E)=1.
+        // 2) Nel raggio ma NON lo vedo → revisione bayesiana P(E|¬Seen), con
+        //    P(¬Seen|E)=1−affidabilità sensore e P(¬Seen|¬E)=1.
         const myDist = smartDist(beliefs.me, p);
         const inRange = myDist < obsDist;
         if (inRange) {
@@ -274,10 +266,9 @@ export function updateSensing(sensing) {
     beliefs.carrying       = mine.length > 0;
     beliefs.carriedParcels = mine;
 
-    // Valore di OGNI pacco AL MOMENTO DELLA RACCOLTA (per il fallback "consegna
-    // comunque" dello stack: consegna se un pacco è sceso del N% del suo valore
-    // originale). Registriamo alla prima volta che lo vediamo in mano e puliamo
-    // gli id non più portati (consegnati/scaricati).
+    // Valore di ogni pacco al momento della raccolta (per il fallback "consegna
+    // comunque" dello stack). Registrato alla prima volta che è in mano; gli id
+    // non più portati vengono rimossi.
     beliefs.collectedReward ??= new Map();
     const carriedIds = new Set(mine.map(p => p.id));
     for (const p of mine)
@@ -352,13 +343,10 @@ export function getTeammateAgent() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Quali pacchi consegnare DAVVERO in base alle regole attive (beliefs.activeRules,
-// impostato dal processo LLM; in main.js è undefined → si consegna tutto):
-//   - max_deliver_reward = T → solo i pacchi che valgono ≤ T (consegnarne uno > T
-//     darebbe 0 → lo si tiene finché decade nel range);
-//   - stack_size = N         → al massimo N (i più ricchi tra i consegnabili);
+// Id dei pacchi da consegnare secondo beliefs.activeRules (undefined → tutti):
+//   - max_deliver_reward = T → solo i pacchi ≤ T (uno > T darebbe 0);
+//   - stack_size = N         → al massimo N (i più ricchi);
 //   - nessuna regola         → tutti i pacchi portati.
-// Ritorna la lista di id da passare a emitPutdown.
 // ─────────────────────────────────────────────────────────────────────────────
 export function deliverableIds(beliefs) {
     let parcels = beliefs.carriedParcels ?? [];
@@ -372,9 +360,9 @@ export function deliverableIds(beliefs) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Riconcilia la posizione delle casse con lo stato reale del server.
-// Va chiamata ad ogni onSensing, DOPO updateSensing().
-// Usa sensing.crates se disponibile, altrimenti inferisce dalle tile visibili.
+// Riconcilia la posizione delle casse col server. Da chiamare ad ogni onSensing
+// DOPO updateSensing(). Usa sensing.crates se c'è, altrimenti inferisce dalle
+// tile visibili.
 // ─────────────────────────────────────────────────────────────────────────────
 export function updateCrates(sensing) {
     if (!beliefs.isCrateMap) return;
@@ -384,17 +372,14 @@ export function updateCrates(sensing) {
     const mx = Math.round(me.x);
     const my = Math.round(me.y);
 
-    // Correzione immediata: l'agente non può fisicamente stare su una cella
-    // con una cassa. Se crateTiles la marca occupata è uno stato stale
-    // (es. un altro agente l'ha spostata) — rimuovila subito, non solo
-    // a livello di generazione del problema PDDL.
+    // L'agente non può stare su una cella con una cassa: se crateTiles la marca
+    // occupata è uno stato stale → rimuovila subito.
     const selfKey = `${mx}_${my}`;
     if (beliefs.crateTiles.has(selfKey)) {
         beliefs.crateTiles.delete(selfKey);
         beliefs.mapTiles.set(selfKey, { type: '5' });
-        // FIX: una cassa che si sposta può liberare il percorso verso QUALSIASI
-        // target prima escluso, non solo verso la propria vecchia posizione —
-        // resettiamo tutta l'esclusione invece della sola chiave selfKey.
+        // Una cassa spostata può liberare il percorso verso QUALSIASI target
+        // prima escluso → resettiamo tutta l'esclusione.
         if (beliefs.unreachableCrateTargets.size > 0) {
             console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
             beliefs.unreachableCrateTargets.clear();
@@ -458,9 +443,8 @@ export function updateCrates(sensing) {
         }
     }
 
-    // B2: aggiungi casse in slot '5' non walkable e non occupati da agenti.
-    // Un '5' nel raggio visivo che il server non riporta come walkable e non
-    // è occupato da un agente noto deve avere una cassa (es. dopo restart).
+    // B2: aggiungi casse in slot '5' nel raggio, non walkable e non occupati da
+    // un agente noto → devono avere una cassa (es. dopo restart).
     const agentKeys = new Set(
         [...beliefs.agents.values()].map(a => `${Math.round(a.x)}_${Math.round(a.y)}`)
     );

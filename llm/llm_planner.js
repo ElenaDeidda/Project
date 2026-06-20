@@ -1,24 +1,19 @@
 // llm_planner.js
-// Le fasi che usano l'LLM: FASE 0 comprensione (intento JSON), compilazione
-// deterministica dell'intento in step, FASE 1 planning e FASE 3 reflection.
+// Fasi LLM: FASE 0 comprensione (intento JSON) + compilazione deterministica,
+// FASE 1 planning, FASE 3 reflection.
 
 import { callModel } from './llm_client.js';
 import { buildPlannerPrompt, buildReplannerPrompt, buildUnderstandPrompt } from './llm_prompts.js';
 import { parsePlan, parseIntentJson, extractFinalAnswer } from './llm_parsers.js';
 import { coordStr, nearestCandidate } from './world_state.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// FASE 0: COMPRENSIONE (query rewriting -> intento JSON strutturato)
-//
-// 1 sola chiamata LLM il cui UNICO compito e capire COSA fare e in che ORDINE,
-// senza inventare coordinate. Da qui ricaviamo gli step in modo DETERMINISTICO
-// (compileIntent), cosi il planner non puo allucinare (es. delivery point
-// inventati). Separare "capire" da "fare" e cio che rende il tutto robusto.
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── FASE 0: COMPRENSIONE (intento JSON strutturato) ─────────────────────────
+// 1 chiamata LLM che capisce COSA fare e in che ORDINE senza inventare
+// coordinate; gli step si ricavano poi in modo deterministico (compileIntent).
 
 /**
- * Chiama l'LLM una volta per CAPIRE la missione -> intento JSON strutturato.
- * @returns {Promise<object|null>} intento normalizzato, o null se non interpretabile
+ * Chiama l'LLM per capire la missione -> intento JSON normalizzato.
+ * @returns {Promise<object|null>} null se non interpretabile
  */
 async function understandMission(missionText, beliefs, tools) {
     const world = await tools.inspect();
@@ -37,9 +32,8 @@ async function understandMission(missionText, beliefs, tools) {
 }
 
 /**
- * Compila DETERMINISTICAMENTE l'intento in step eseguibili (stesso formato che
- * usa l'execution loop). Niente LLM, niente coordinate inventate: i target
- * vengono solo dall'intento (che a sua volta li prende solo dal testo missione).
+ * Compila deterministicamente l'intento in step eseguibili. Niente LLM: i
+ * target vengono solo dall'intento (a sua volta solo dal testo missione).
  * @returns {{steps: Array<{action, target, description}>}}
  */
 function compileIntent(intent, beliefs) {
@@ -93,10 +87,7 @@ function compileIntent(intent, beliefs) {
 // ── FASE 1: PLANNING ─────────────────────────────────────────────────────────
 
 /**
- * Chiama l'LLM una sola volta per generare il piano.
- * @param {string} missionText
- * @param {object} beliefs
- * @param {object} tools
+ * Genera il piano con 1 chiamata LLM.
  * @returns {Promise<{steps: Array<{action, target, description}>, reasoning: string}>}
  */
 async function generatePlan(missionText, beliefs, tools) {
@@ -115,15 +106,9 @@ async function generatePlan(missionText, beliefs, tools) {
 // ── FASE 3: REFLECTION (opzionale, solo su errore) ───────────────────────────
 
 /**
- * Chiama l'LLM per correggere il piano quando uno step fallisce. Restituisce il
- * piano RIVISTO per i passi rimanenti (dal passo fallito in poi), senza
- * rigenerare quelli gia completati.
- * @param {string} missionText
- * @param {{steps: Array}} originalPlan
+ * Corregge il piano dopo uno step fallito: restituisce il piano rivisto dai
+ * passi rimanenti in poi, senza rigenerare quelli gia completati.
  * @param {number} failedStepIndex   indice 0-based del passo fallito
- * @param {string} error
- * @param {object} beliefs
- * @param {object} tools
  * @returns {Promise<{steps: Array, reasoning: string}>}
  */
 async function reflectOnError(missionText, originalPlan, failedStepIndex, error, beliefs, tools) {

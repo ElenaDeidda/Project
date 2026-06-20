@@ -1,13 +1,7 @@
 // communication.js
 // Canale di comunicazione tra l'agente BDI e l'agente LLM dello stesso team.
-// Il teamId e letto dai beliefs (popolato dal server in onYou), cosi non serve
-// hardcodarlo nel .env. Messaggi con teamId diverso vengono scartati.
-//
-// USO:
-//   import { initComms, shareBeliefs, onTeamMessage, askTeammate } from './communication.js';
-//   initComms(socket, beliefs);   // chiamare DOPO che onYou ha popolato beliefs.me.teamId
-//   onTeamMessage('parcels_update', (payload, from) => { ...aggiorna beliefs... });
-//   shareBeliefs(beliefs);
+// Il teamId e letto dai beliefs (popolato dal server in onYou); messaggi con
+// teamId diverso vengono scartati. initComms() va chiamato DOPO onYou.
 
 const MY_ROLE = process.env.ROLE || 'peer'; // 'bdi' | 'llm' | 'peer'
 
@@ -22,23 +16,18 @@ const _handlers    = new Map();       // type -> [callback]
 const _teammates   = new Set();       // id degli alleati confermati
 const _pendingAsks = new Map();       // askId -> resolve()
 
-// Override MANUALE opzionale: allowlist di nomi via env TEAM_NAMES="elena,lara".
-// Di norma NON serve: il compagno si riconosce da solo via teamName (vedi
-// isFromTeammate). Resta come ripiego se i teamName non combaciano.
+// Allowlist opzionale di nomi via env TEAM_NAMES="elena,lara": ripiego se i
+// teamName non combaciano (di norma il riconoscimento e automatico).
 let _allowedNames = new Set();
 
-// teamId / teamName correnti - letti dinamicamente (popolati dal server in onYou)
+// teamId / teamName correnti, letti dinamicamente.
 function teamId()   { return _beliefs?.me?.teamId   || ''; }
 function teamName() { return _beliefs?.me?.teamName || ''; }
 
-// Busta standard di OGNI messaggio: porta sempre teamId E teamName, cosi il
-// destinatario puo' riconoscere il compagno automaticamente via teamName.
+// Busta standard di ogni messaggio: porta sempre teamId e teamName.
 function envelope(fields) { return { teamId: teamId(), teamName: teamName(), ...fields }; }
 
-// E un messaggio di un mio compagno? Riconoscimento AUTOMATICO via teamName:
-// se il teamName nel messaggio e uguale al mio, e' un compagno (anche se il
-// teamId - legato al token - e diverso). Fallback: stesso teamId, oppure nome
-// del mittente in TEAM_NAMES (override manuale opzionale via .env).
+// Il messaggio viene da un compagno? Match per teamName, poi teamId, poi allowlist.
 function isFromTeammate(senderName, msg) {
     if (!msg || typeof msg !== 'object') return false;
     const myName = String(_beliefs?.me?.name || '').toLowerCase();

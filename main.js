@@ -1,8 +1,5 @@
-// main.js — entry point unico: avvia bdi_main.js e llm_main.js come due
-// processi Node separati (non import nello stesso processo): entrambi
-// caricano il proprio .env con dotenv.config({ override: true }), quindi
-// condividerebbero (e si sovrascriverebbero) process.env se girassero nello
-// stesso processo. Con spawn ognuno ha il proprio process.env duplicato.
+// main.js — entry point: avvia bdi_main.js e llm_main.js come processi Node
+// separati, cosi ognuno ha il proprio process.env (.env con override).
 
 import { spawn } from 'child_process';
 

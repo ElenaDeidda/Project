@@ -5,12 +5,8 @@
 import { snapshotWorld } from './world_state.js';
 
 /**
- * Costruisce il messaggio user statico che traccia il progresso. Si aggiorna
- * in-place ad ogni step (non si aggiungono nuovi elementi all'array messages),
- * cosi il context resta costante.
- * @param {string} missionText
+ * Costruisce il messaggio user che traccia il progresso della missione.
  * @param {{lastAction, lastOutcome, completedSteps, totalSteps}} state
- * @param {object} beliefs
  * @returns {string}
  */
 function buildStatefulUserMessage(missionText, state, beliefs) {

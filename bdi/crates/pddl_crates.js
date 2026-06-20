@@ -1,16 +1,6 @@
 // pddl_creates.js
 // Planner PDDL per mappe con casse (tile tipo '5!').
-//
-// Struttura ispirata al pattern lab5 (4domain.js):
-//   1. buildDomain()        → stringa PDDL fissa del dominio
-//   2. buildProblem()       → stringa PDDL generata dai beliefs correnti
-//   3. callSolver()         → chiama onlineSolver con timeout
-//   4. buildExecutionPlan() → separa push da segmenti move puri (→ A*)
-//   5. execCratePlan()      → executor: push con emitMove, move con A*;
-//                             se A* fallisce → ricalcola con il solver
-//
-// Unico export pubblico: execCratePlan() — usato da plans_crate.js
-// Import dalla libreria: solo onlineSolver
+// Export pubblico: execCratePlan().
 
 import { onlineSolver } from '@unitn-asa/pddl-client';
 import { navigateTo }                  from '../moves.js';
@@ -18,8 +8,7 @@ import { navigateTo }                  from '../moves.js';
 const PDDL_TIMEOUT_MS = 5000;
 const ASTAR_RETRY     = 3;      // tentativi A* prima di tornare al solver
 
-// Cache piani: chiave = target + stato attuale delle casse. Evita di
-// richiamare il solver remoto per la stessa identica configurazione.
+// Cache piani per evitare di richiamare il solver per la stessa configurazione.
 const planCache = new Map();   // "tx_ty|crateState" → rawPlan
 
 function crateStateHash(beliefs) {

@@ -1,17 +1,8 @@
 // mission_evaluator.js
-// Decide se una special mission CONVIENE o va IGNORATA.
-// La challenge avverte: alcune missioni sono trappole (reward negativo) o
-// costano più di quanto rendono. Questo modulo fa il calcolo costi/benefici.
-//
-// USO:
-//   import { evaluateMission, extractReward } from './mission_evaluator.js';
-//   const verdict = evaluateMission(missionText, beliefs);
-//   if (verdict.worth) { ...esegui con llm_agent... } else { ...ignora... }
+// Calcolo costi/benefici di una special mission: priorità in coda e riconoscimento
+// delle regole L2.
 
-// Pattern che riconoscono una missione di Livello 2 = REGOLA persistente.
-// Sono missioni che modificano il comportamento normale del gioco per il
-// resto della partita. Vanno installate via set_rule() e tipicamente
-// raddoppiano/triplicano i punti per il resto della partita → priorità alta.
+// Pattern di una missione L2 = regola persistente (installata via set_rule).
 const L2_PATTERNS = [
     /stacks?\s+of/i,                 // "stacks of 3", "stacks of exactly 5 ..."
     /every\s+time/i,                 // "every time you deliver"
@@ -31,9 +22,8 @@ function looksLikeRule(text) {
 
 
 /**
- * Estrae il reward dichiarato dal testo della missione.
- * Gestisce '+10pts', '-10pt', '5x pts', '200 points', ecc.
- * @returns {number|null}  reward in punti, o null se non trovato
+ * Estrae il reward dichiarato dal testo ('+10pts', '-10pt', '5x pts', '200 points').
+ * @returns {number|null}  reward in punti, null se non trovato
  */
 export function extractReward(text) {
     const t = text.toLowerCase();
@@ -63,10 +53,8 @@ export function extractReward(text) {
 
 
 /**
- * Estrae un MOLTIPLICATORE del reward dal testo ("double"→2, "triple"→3,
- * "halve/half"→0.5, "0.3 times"→0.3, "2x"→2, "0.3 of the reward"→0.3). Serve a
- * capire se una regola CONVIENE (≥1) o è DANNOSA (<1, riduce il reward). null se
- * non c'è.
+ * Estrae un moltiplicatore del reward dal testo ("double"→2, "halve"→0.5,
+ * "0.3 times"→0.3). Distingue regola conveniente (≥1) da dannosa (<1). null se assente.
  * @returns {number|null}
  */
 export function extractMultiplier(text) {
@@ -89,8 +77,7 @@ export function extractMultiplier(text) {
 
 
 /**
- * Stima la distanza/costo per completare la missione.
- * Cerca coordinate target nel testo e calcola la distanza dall'agente.
+ * Stima il costo in passi: distanza dall'agente al target trovato nel testo.
  * @returns {number}  passi stimati (0 se nessun movimento richiesto)
  */
 function estimateCost(text, beliefs) {
@@ -123,12 +110,7 @@ function evalSafe(expr) {
 
 
 /**
- * Verdetto principale: la missione conviene? E quanto?
- * - `worth`    : false → scartare (trappole, missioni inutilmente costose)
- * - `priority` : numero, più alto = più importante. Usato dalla mission_queue
- *                per scegliere tra missioni concorrenti.
- * @param {string} missionText
- * @param {object} beliefs   beliefs dell'agente (per posizione/distanze)
+ * Verdetto: priorità della missione per la mission_queue (più alto = più importante).
  * @returns {{worth:boolean, priority:number, reward:number|null, cost:number, reason:string}}
  */
 export function evaluateMission(missionText, beliefs) {
@@ -136,45 +118,31 @@ export function evaluateMission(missionText, beliefs) {
     const cost   = estimateCost(missionText, beliefs);
     const isL2   = looksLikeRule(missionText);
 
-    // 0. Livello 2 (regole persistenti): priorità ALTA per default. Vengono
-    //    intercettate solo dalle missioni-trappola davvero negative (sotto).
-    //    Costo ≈ 0 (l'LLM chiama solo set_rule), valore ≈ doppio per il resto
-    //    della partita → priorità 30 di base, smorzata se chiaramente penale
-    //    (es. "no reward if ..." che è comunque utile installare per evitare
-    //    sprechi di tempo su pacchi che non danno punti).
+    // 0. Regola L2: urgente e a costo ~0. Priorità per magnitudine |reward|,
+    //    base 30 quando il numero non è dichiarato.
     if (isL2) {
-        // Regola persistente = URGENTE (va installata subito) e a COSTO ~0
-        // (l'LLM chiama solo set_rule, niente viaggio: ignoriamo `cost`).
-        // Priorità per MAGNITUDINE: |reward| (evitare −1000 ≈ guadagnare +1000),
-        // con una base alta di default quando il numero non è dichiarato.
         const mag = reward != null ? Math.abs(reward) : null;
         const priority = mag != null ? Math.max(30, mag) : 30;
         return { worth: true, priority, urgent: true, reward, cost,
                  reason: `regola L2 (URGENTE, magnitudine=${mag ?? '—'}, pri=${priority})` };
     }
 
-    // NOTA (policy "esegui sempre"): la coda NON cestina più le missioni. La
-    // decisione "saltare o no" è demandata allo stadio di COMPRENSIONE in
-    // llm_agent (family:"ignore" = trappola auto-lesiva). Qui calcoliamo SOLO
-    // la priorità. Così non buttiamo via missioni-obbligo a penalità (es. il
-    // "red light/green light", che ha reward negativo ma è un OBBLIGO).
+    // Policy "esegui sempre": la coda non cestina, lo skip lo decide la
+    // COMPRENSIONE in llm_agent (family:"ignore"). Qui solo la priorità.
 
-    // 1. Reward esplicito ≤ 0 (non-L2): NON scartata, ma priorità minima — la
-    //    comprensione deciderà se è una trappola da ignorare o un obbligo.
+    // 1. Reward ≤ 0 (non-L2): priorità minima, decisione rimandata alla comprensione.
     if (reward !== null && reward <= 0) {
         return { worth: true, priority: 0.1, reward, cost,
                  reason: 'reward ≤ 0: decisione rimandata alla comprensione' };
     }
 
-    // 2. Missione informativa (no reward, no target) → costo 0
-    //    Priorità BASSA: l'agente la esegue solo se non c'è di meglio in coda.
+    // 2. Missione informativa (no reward, no target): priorità bassa.
     if (cost === 0 && reward === null) {
         return { worth: true, priority: 0.5, reward, cost,
                  reason: 'missione informativa, costo nullo' };
     }
 
-    // 3. Reward ignoto ma c'è un costo → eseguita comunque, priorità in base
-    //    alla vicinanza del target (più vicino = priorità un filo più alta).
+    // 3. Reward ignoto con costo: priorità in base alla vicinanza del target.
     if (reward === null) {
         const near = cost <= 10;
         return { worth: true, priority: near ? 1.0 : 0.3, reward, cost,
@@ -182,10 +150,7 @@ export function evaluateMission(missionText, beliefs) {
                               : 'reward ignoto, target lontano' };
     }
 
-    // 4. Reward noto: eseguita comunque. priority = reward / (cost+1): più punti
-    //    per passo = priorità più alta (le "troppo costose" finiscono in fondo
-    //    alla coda, ma NON vengono scartate).
-    //    Esempio: 500pt in 5 passi = 83.3; 10pt in 2 passi = 3.3; 10pt in 20 passi = 0.5
+    // 4. Reward noto: priority = reward / (cost+1) (più punti per passo = priorità più alta).
     const priority = reward / (cost + 1);
     return {
         worth: true, priority, reward, cost,
