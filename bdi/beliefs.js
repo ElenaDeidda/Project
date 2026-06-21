@@ -1,0 +1,463 @@
+// beliefs.js — Stato del mondo e funzioni di aggiornamento
+import { smartDist, parseIntervalMs } from './basic_functions.js';
+
+// ─── Credenze "with uncertainty" ─────────────────────────────────────────────
+// Ogni pacco fuori vista ha una confidenza P(esiste ancora) che decade nel
+// tempo e viene rivista in stile bayesiano. Costanti tarabili:
+const CONF_LAMBDA        = Math.LN2 / 10000;  // half-life 10s di P(esiste) fuori vista
+const SENSOR_RELIABILITY = 0.9;               // P(vedo il pacco | è nel raggio ed esiste)
+const ENEMY_NEAR_DIST    = 5;                 // un nemico entro questa distanza dal pacco…
+const ENEMY_DECAY_MULT   = 4;                 // …fa decadere P(esiste) 4× più in fretta
+const CONF_EPS           = 0.05;              // sotto questa confidenza il pacco è "perso"
+const CONF_DEBUG         = true;              // ⇦ metti false per zittire i log [CONF]
+
+export const beliefs = {
+    me:             { id: '', name: '', teamId: '', teamName: '', x: 0, y: 0, score: 0 },
+    config:         {},
+    mapTiles:       new Map(),
+    isDirectionalMap: false,
+    isCrateMap:     false,
+    crateTiles:     new Map(),   // "x_y" → {x, y}
+    deliveryPoints: [],
+    parcels:        new Map(),
+    agents:         new Map(),   // id → { x, y, moving, direction, targetX, targetY }
+    carrying:       false,
+    carriedParcels: [],
+
+    // Precalcolato in updateMap():
+    // per ogni spawn tile "x_y" → quante spawn tiles sono visibili da quel punto
+    spawnVisibility: new Map(),
+
+    // Coordinamento di team (null = nessuno). frozen → loop BDI fermo;
+    // override → predicate forzata; role → 'collector'|'postman'|null.
+    coord: null,
+
+    // Target esclusi in modo permanente: il solver PDDL ha confermato che non
+    // esiste un piano (mappa con casse).
+    unreachableCrateTargets: new Set(),
+
+    // true quando nessun target ha un piano possibile → l'agente smette di
+    // deliberare (vedi haltAgent()).
+    halted: false,
+};
+
+export function updateConfig(config) {
+    beliefs.config = config;
+}
+
+// Ferma definitivamente la deliberazione: nessun target raggiungibile con
+// l'attuale configurazione delle casse.
+export function haltAgent(reason) {
+    if (beliefs.halted) return;
+    beliefs.halted = true;
+    console.error(`[BDI] ESECUZIONE BLOCCATA — ${reason}`);
+}
+
+export function updateMap(width, height, tiles) {
+    // Reset: onMap arriva con la mappa COMPLETA anche ad ogni restart. Senza
+    // azzerare, mapTiles/deliveryPoints/spawnVisibility si accumulerebbero tra
+    // partite → ricostruiamo da zero.
+    beliefs.mapTiles.clear();
+    beliefs.deliveryPoints.length = 0;
+    beliefs.spawnVisibility.clear();
+    beliefs.isDirectionalMap = false;
+
+    // --- 1. Costruisce mapTiles e deliveryPoints ---
+    const ARROW_TYPES = new Set(['→', '←', '↑', '↓']);
+    for (const tile of tiles) {
+        const key = `${tile.x}_${tile.y}`;
+        beliefs.mapTiles.set(key, { type: String(tile.type) });
+        if (tile.type == '2') beliefs.deliveryPoints.push({ x: tile.x, y: tile.y });   
+        if (ARROW_TYPES.has(tile.type)) beliefs.isDirectionalMap = true;
+        if (tile.type === '5!' || tile.type === '5') {
+            beliefs.isCrateMap = true;
+        }
+        if (tile.type === '5!') {
+            beliefs.crateTiles.set(key, { x: tile.x, y: tile.y });
+        }
+        //console.log(`[BELIEFS] isDirectionalMap = ${beliefs.isDirectionalMap}`);
+
+    }
+
+    // --- 2. Precalcola spawnVisibility ---
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+
+    for (const [key, tile] of beliefs.mapTiles.entries()) {
+        if (tile.type != '1') continue;
+
+        const [x, y] = key.split('_').map(Number);
+        let count = 0;
+
+        for (const [k2, t2] of beliefs.mapTiles.entries()) {
+            if (t2.type != '1') continue;
+            const [sx, sy] = k2.split('_').map(Number);
+            if (Math.abs(sx - x) + Math.abs(sy - y) < obsDist) count++;
+        }
+
+        beliefs.spawnVisibility.set(key, count);
+        //console.log(`[BELIEFS] spawnVisibility (${x},${y}) = ${count}`);
+    }
+
+    //console.log(`[BELIEFS] spawnVisibility calcolata per ${beliefs.spawnVisibility.size} spawn tiles`);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stampa "umana" della mappa con le coordinate. Funzione PURA: ritorna una
+// stringa multilinea. Convenzione server: origine (0,0) in basso a sinistra,
+// y cresce verso l'alto → righe disegnate da ymax a ymin.
+// ─────────────────────────────────────────────────────────────────────────────
+export function formatMap(beliefs) {
+    const tiles = beliefs.mapTiles;
+    if (!tiles || tiles.size === 0) return '[MAP] mappa non ancora caricata';
+
+    let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+    for (const key of tiles.keys()) {
+        const [x, y] = key.split('_').map(Number);
+        if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+    }
+
+    const ARROWS = new Set(['→', '←', '↑', '↓']);
+    const symFor = (type) => {
+        switch (type) {
+            case '0':  return '#';   // muro
+            case '1':  return 'S';   // spawner pacchi
+            case '2':  return 'D';   // delivery
+            case '3':  return '·';   // calpestabile
+            case '4':  return 'B';   // base
+            case '5':   return '▒';   // crate
+            case '5!': return '[]';   // crate
+            default:   return ARROWS.has(type) ? type : '?';
+        }
+    };
+
+    const mex = Math.round(beliefs.me?.x ?? NaN);
+    const mey = Math.round(beliefs.me?.y ?? NaN);
+
+    // Tile vietate (forbidden_tile): mostrate come 'X' anche se ora sono muri.
+    const forbidden = beliefs.forbiddenTiles instanceof Map ? beliefs.forbiddenTiles : null;
+    const isForbidden = (x, y) => !!forbidden && forbidden.has(`${x}_${y}`);
+
+    const yLabelW = Math.max(String(ymin).length, String(ymax).length);
+    const margin  = ' '.repeat(yLabelW + 1);
+    const padY    = (y) => String(y).padStart(yLabelW, ' ');
+
+    const lines = [];
+    lines.push(`[MAP] dimensioni ${xmax - xmin + 1}×${ymax - ymin + 1} — x ${xmin}..${xmax}, y ${ymin}..${ymax} — ${tiles.size} tile — direzionale=${!!beliefs.isDirectionalMap}`);
+    lines.push(`[MAP] origine (0,0) in BASSO a SINISTRA · x → destra · y ↑ alto`);
+    lines.push(`[MAP] legenda: @=tu  X=vietata(muro)  D=delivery  S=spawn pacchi  #=muro  ·=calpestabile  B=base  ▒=crate  (vuoto=ignoto)`);
+
+    // Intestazione X: riga delle decine (se serve) + riga delle unità, allineate.
+    if (xmax >= 10) {
+        let tens = '';
+        for (let x = xmin; x <= xmax; x++) tens += (x >= 10 ? String(Math.floor(x / 10) % 10) : ' ');
+        lines.push(margin + tens);
+    }
+    let units = '';
+    for (let x = xmin; x <= xmax; x++) units += String(((x % 10) + 10) % 10);
+    lines.push(margin + units);
+
+    // Righe dall'ALTO (ymax) al BASSO (ymin), così la stampa rispetta il "su/giù".
+    for (let y = ymax; y >= ymin; y--) {
+        let row = '';
+        for (let x = xmin; x <= xmax; x++) {
+            if (x === mex && y === mey)  { row += '@'; continue; }
+            if (isForbidden(x, y))       { row += 'X'; continue; }
+            const t = tiles.get(`${x}_${y}`);
+            row += t ? symFor(t.type) : ' ';
+        }
+        lines.push(`${padY(y)} ${row}`);
+    }
+
+    const dps = beliefs.deliveryPoints ?? [];
+    lines.push(`[MAP] tu @ (${mex},${mey})`);
+    lines.push(`[MAP] delivery_points (${dps.length}): ${dps.map(d => `(${d.x},${d.y})`).join(' ') || 'nessuno'}`);
+    if (forbidden && forbidden.size > 0) {
+        lines.push(`[MAP] tile vietate (${forbidden.size}): ${[...forbidden.keys()].map(k => `(${k.replace('_', ',')})`).join(' ')}`);
+    }
+
+    return lines.join('\n');
+}
+
+export function updateSensing(sensing) {
+    const now    = Date.now();
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+    const decayMs = parseIntervalMs(beliefs.config.GAME?.parcels?.decaying_event);
+
+    // --- 1. Aggiorna/inserisce i pacchi visti ORA ---
+    const seen = new Set();
+    for (const p of sensing.parcels) {
+        // Pacco in mano a un avversario: rimuovilo dalla memoria
+        if (p.carriedBy && p.carriedBy !== beliefs.me.id) {
+            beliefs.parcels.delete(p.id);
+            continue;
+        }
+        seen.add(p.id);
+        const prev = beliefs.parcels.get(p.id);
+        if (CONF_DEBUG && prev && (prev.confidence ?? 1) < 1)
+            console.log(`[CONF] ${p.id} @(${p.x},${p.y}) RIVISTO → confidence ripristinata 1.00 (era ${(prev.confidence).toFixed(2)})`);
+        beliefs.parcels.set(p.id, {
+            id: p.id, x: p.x, y: p.y,
+            reward: p.reward, carriedBy: p.carriedBy ?? null,
+            lastDecay: now,            // ultimo istante in cui ho scontato il decay
+            confidence: 1,             // visto ORA → P(esiste)=1 (modello "with uncertainty")
+            lastSeen: now,
+            lastConfUpdate: now,
+        });
+    }
+
+    // Aggiorna gli agenti PRIMA della riconciliazione pacchi, così la confidenza
+    // può tener conto dei nemici vicini.
+    updateAgents(sensing.agents ?? []);
+
+    // --- 2. Riconcilia i pacchi NON visti in questo tick (memoria) ---
+    // Invece di cancellarli subito (causerebbe oscillazione tra target),
+    // manteniamo una confidenza P(esiste) che decade e viene rivista (bayes).
+    for (const [id, p] of beliefs.parcels) {
+        if (seen.has(id)) continue;
+
+        // Reward atteso: continua a scontare il decay di gioco (valore SE esiste).
+        if (Number.isFinite(decayMs)) {
+            p.reward   -= (now - p.lastDecay) / decayMs;
+            p.lastDecay = now;
+            if (p.reward <= 0) { beliefs.parcels.delete(id); continue; }
+        }
+
+        // 1) Decadimento temporale di P(esiste). Più veloce se un nemico è
+        //    vicino al pacco (può averlo già raccolto).
+        const cStart = p.confidence ?? 1;
+        const dt = now - (p.lastConfUpdate ?? now);
+        p.lastConfUpdate = now;
+        let lambda = CONF_LAMBDA, enemyDist = null;
+        for (const a of beliefs.agents.values()) {
+            const d = smartDist(a, p);
+            if (d <= ENEMY_NEAR_DIST) { lambda *= ENEMY_DECAY_MULT; enemyDist = d; break; }
+        }
+        let c = cStart * Math.exp(-lambda * dt);
+        const cAfterTime = c;
+
+        // 2) Nel raggio ma NON lo vedo → revisione bayesiana P(E|¬Seen), con
+        //    P(¬Seen|E)=1−affidabilità sensore e P(¬Seen|¬E)=1.
+        const myDist = smartDist(beliefs.me, p);
+        const inRange = myDist < obsDist;
+        if (inRange) {
+            const pNsE = 1 - SENSOR_RELIABILITY;
+            c = (pNsE * c) / (pNsE * c + (1 - c));
+        }
+
+        p.confidence = c;
+
+        if (CONF_DEBUG) {
+            const why = [];
+            why.push(`temporale ${cStart.toFixed(2)}→${cAfterTime.toFixed(2)} (Δt=${dt}ms)`);
+            if (enemyDist !== null) why.push(`nemico a ${enemyDist} → decay ×${ENEMY_DECAY_MULT}`);
+            if (inRange)           why.push(`IN-RANGE non visto (dist ${myDist}≤${obsDist}) → bayes ${cAfterTime.toFixed(2)}→${c.toFixed(2)}`);
+            console.log(`[CONF] ${id} @(${p.x},${p.y}) fuori-vista: ${why.join(' | ')}  ⇒ confidence=${c.toFixed(2)}${c < CONF_EPS ? ' ✗ PERSO (rimosso)' : ''}`);
+        }
+
+        if (c < CONF_EPS) beliefs.parcels.delete(id);   // confidenza troppo bassa → "perso"
+    }
+
+    //console.log(`[updateSensing] parcels visibili:`, seen.size, `| in memoria:`, beliefs.parcels.size - seen.size);
+    // console.log(`[updateSensing] parcels:`, [...beliefs.parcels.values()]);
+
+    const mine = sensing.parcels.filter(p => p.carriedBy === beliefs.me.id);
+    beliefs.carrying       = mine.length > 0;
+    beliefs.carriedParcels = mine;
+
+    // Valore di ogni pacco al momento della raccolta (per il fallback "consegna
+    // comunque" dello stack). Registrato alla prima volta che è in mano; gli id
+    // non più portati vengono rimossi.
+    beliefs.collectedReward ??= new Map();
+    const carriedIds = new Set(mine.map(p => p.id));
+    for (const p of mine)
+        if (!beliefs.collectedReward.has(p.id)) beliefs.collectedReward.set(p.id, p.reward);
+    for (const id of beliefs.collectedReward.keys())
+        if (!carriedIds.has(id)) beliefs.collectedReward.delete(id);
+    // console.log(`[updateSensing] carrying:`, beliefs.carrying);
+    //console.log(`[updateSensing] carriedParcels:`, beliefs.carriedParcels);
+    // NB: updateAgents è già stato chiamato sopra (prima della riconciliazione pacchi).
+}
+
+export function updateAgents(agents) {
+    beliefs.agents.clear();
+
+    for (const a of agents) {
+        if (a.x == null || a.y == null) continue;
+
+        const fracX = a.x % 1;
+        const fracY = a.y % 1;
+        const moving = fracX !== 0 || fracY !== 0;
+
+        let direction = 'none';
+        let targetX   = Math.round(a.x);
+        let targetY   = Math.round(a.y);
+
+        if (moving) {
+            if (fracX > 0.5)       { direction = 'right'; targetX = Math.floor(a.x) + 1; }
+            else if (fracX > 0)    { direction = 'left';  targetX = Math.floor(a.x);     }
+            else if (fracY > 0.5)  { direction = 'up';    targetY = Math.floor(a.y) + 1; }
+            else if (fracY > 0)    { direction = 'down';  targetY = Math.floor(a.y);     }
+        }
+
+        beliefs.agents.set(a.id, {
+            x: a.x, y: a.y,
+            moving, direction,
+            targetX, targetY,
+            teamId: a.teamId ?? null,                       // per distinguere alleati/nemici
+            isTeammate: !!(a.teamId && a.teamId === beliefs.me.teamId),
+        });
+
+        //console.log(`[updateAgents] "${a.name}" (${a.id}) @ (${a.x},${a.y}) moving:${moving} dir:${direction} → target:(${targetX},${targetY})`);
+    }
+
+    //console.log(`[updateAgents] agenti tracciati:`, beliefs.agents.size);
+}
+
+export function getBlockedCells() {
+    const blocked = new Set();
+    for (const a of beliefs.agents.values()) {
+        blocked.add(`${Math.round(a.x)}_${Math.round(a.y)}`);
+        blocked.add(`${a.targetX}_${a.targetY}`);
+    }
+    //console.log(`[getBlockedCells] celle bloccate:`, blocked.size);
+    return blocked;
+}
+
+export function getAgentPositions() {
+    const out = [];
+    for (const a of beliefs.agents.values()) {
+        out.push({ x: Math.round(a.x), y: Math.round(a.y) });
+        if (a.moving) out.push({ x: a.targetX, y: a.targetY });
+    }
+    //console.log(`[getAgentPositions] posizioni note:`, out);
+    return out;
+}
+
+// Compagno di team attualmente visibile (o null). Usato dal coordinamento di
+// livello 3 per sapere dove si trova l'alleato (es. attesa "incontro" staffetta).
+export function getTeammateAgent() {
+    for (const a of beliefs.agents.values()) if (a.isTeammate) return a;
+    return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Id dei pacchi da consegnare secondo beliefs.activeRules (undefined → tutti):
+//   - max_deliver_reward = T → solo i pacchi ≤ T (uno > T darebbe 0);
+//   - stack_size = N         → al massimo N (i più ricchi);
+//   - nessuna regola         → tutti i pacchi portati.
+// ─────────────────────────────────────────────────────────────────────────────
+export function deliverableIds(beliefs) {
+    let parcels = beliefs.carriedParcels ?? [];
+    const T = beliefs.activeRules?.maxDeliverReward;
+    if (typeof T === 'number') parcels = parcels.filter(p => (p.reward ?? 0) <= T);
+    const N = beliefs.activeRules?.stackSize;
+    if (Number.isInteger(N) && parcels.length >= N) {
+        parcels = [...parcels].sort((a, b) => (b.reward ?? 0) - (a.reward ?? 0)).slice(0, N);
+    }
+    return parcels.map(p => p.id);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Riconcilia la posizione delle casse col server. Da chiamare ad ogni onSensing
+// DOPO updateSensing(). Usa sensing.crates se c'è, altrimenti inferisce dalle
+// tile visibili.
+// ─────────────────────────────────────────────────────────────────────────────
+export function updateCrates(sensing) {
+    if (!beliefs.isCrateMap) return;
+
+    const obsDist = beliefs.config.GAME?.player?.observation_distance ?? 5;
+    const me = beliefs.me;
+    const mx = Math.round(me.x);
+    const my = Math.round(me.y);
+
+    // L'agente non può stare su una cella con una cassa: se crateTiles la marca
+    // occupata è uno stato stale → rimuovila subito.
+    const selfKey = `${mx}_${my}`;
+    if (beliefs.crateTiles.has(selfKey)) {
+        beliefs.crateTiles.delete(selfKey);
+        beliefs.mapTiles.set(selfKey, { type: '5' });
+        // Una cassa spostata può liberare il percorso verso QUALSIASI target
+        // prima escluso → resettiamo tutta l'esclusione.
+        if (beliefs.unreachableCrateTargets.size > 0) {
+            console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+            beliefs.unreachableCrateTargets.clear();
+        }
+        console.log(`[BELIEFS] cassa rimossa da (${mx},${my}) — l'agente è su quella cella`);
+    }
+
+    // --- Strategia A: il server manda sensing.crates ---
+    if (sensing.crates && sensing.crates.length > 0) {
+        const serverCrateKeys = new Set(
+            sensing.crates.map(c => `${Math.round(c.x)}_${Math.round(c.y)}`)
+        );
+
+        for (const [key, tile] of beliefs.mapTiles.entries()) {
+            if (tile.type !== '5' && tile.type !== '5!') continue;
+            const [x, y] = key.split('_').map(Number);
+            if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue; // fuori vista
+
+            const serverHasCrate = serverCrateKeys.has(key);
+            const weThinkHasCrate = beliefs.crateTiles.has(key);
+
+            if (weThinkHasCrate && !serverHasCrate) {
+                beliefs.crateTiles.delete(key);
+                beliefs.mapTiles.set(key, { type: '5' });
+                if (beliefs.unreachableCrateTargets.size > 0) {
+                    console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+                    beliefs.unreachableCrateTargets.clear();
+                }
+                console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — riconciliazione server`);
+            }
+            if (!weThinkHasCrate && serverHasCrate) {
+                beliefs.crateTiles.set(key, { x, y });
+                beliefs.mapTiles.set(key, { type: '5!' });
+                console.log(`[BELIEFS] cassa aggiunta a (${x},${y}) — riconciliazione server`);
+            }
+        }
+        return;
+    }
+
+    // --- Strategia B: sensing.crates non disponibile → usa sensing.positions ---
+    // Le positions sono le tile percorribili visibili nel raggio di osservazione.
+    if (!sensing.positions || sensing.positions.length === 0) return;
+
+    const walkableVisible = new Set(
+        sensing.positions.map(p => `${Math.round(p.x)}_${Math.round(p.y)}`)
+    );
+
+    // B1: rimuovi casse in '5!' che ora sono walkable (cassa spostata via)
+    // Usa snapshot per evitare problemi di modifica durante iterazione.
+    for (const [key] of [...beliefs.crateTiles.entries()]) {
+        const [x, y] = key.split('_').map(Number);
+        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue;
+        if (walkableVisible.has(key)) {
+            beliefs.crateTiles.delete(key);
+            beliefs.mapTiles.set(key, { type: '5' });
+            if (beliefs.unreachableCrateTargets.size > 0) {
+                console.log(`[BELIEFS] cassa spostata — reset di ${beliefs.unreachableCrateTargets.size} target esclusi, ritento tutti`);
+                beliefs.unreachableCrateTargets.clear();
+            }
+            console.log(`[BELIEFS] cassa rimossa da (${x},${y}) — tile ora walkable (fallback positions)`);
+        }
+    }
+
+    // B2: aggiungi casse in slot '5' nel raggio, non walkable e non occupati da
+    // un agente noto → devono avere una cassa (es. dopo restart).
+    const agentKeys = new Set(
+        [...beliefs.agents.values()].map(a => `${Math.round(a.x)}_${Math.round(a.y)}`)
+    );
+    agentKeys.add(`${mx}_${my}`); // l'agente stesso non è in beliefs.agents
+
+    for (const [key, tile] of beliefs.mapTiles.entries()) {
+        if (tile.type !== '5') continue;
+        const [x, y] = key.split('_').map(Number);
+        if (Math.abs(x - mx) + Math.abs(y - my) >= obsDist) continue;
+        if (!walkableVisible.has(key) && !agentKeys.has(key)) {
+            beliefs.crateTiles.set(key, { x, y });
+            beliefs.mapTiles.set(key, { type: '5!' });
+            console.log(`[BELIEFS] cassa rilevata a (${x},${y}) — slot non walkable (inferenza positions)`);
+        }
+    }
+}
